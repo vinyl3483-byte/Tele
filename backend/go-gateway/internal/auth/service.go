@@ -398,7 +398,8 @@ func (s *Service) verifyGoogleToken(ctx context.Context, idToken string) (string
 	if info.EmailVerified != "true" || info.Sub == "" {
 		return "", "", errors.New("unverified email")
 	}
-	return normalizeEmail(info.Email)
+	norm, err := normalizeEmail(info.Email)
+	return norm, info.Sub, err
 }
 
 func (s *Service) verifyAppleToken(_ context.Context, identityToken string) (string, string, error) {

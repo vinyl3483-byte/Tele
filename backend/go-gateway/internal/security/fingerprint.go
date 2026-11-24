@@ -21,6 +21,10 @@ func HMACSHA256Hex(secret []byte, data string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
+func HashEmail(secret []byte, email string) string {
+	return HMACSHA256Hex(secret, email)
+}
+
 func ConstantTimeHexEqual(a, b string) bool {
 	if len(a) != len(b) {
 		return false
