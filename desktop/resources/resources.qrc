@@ -1,0 +1,36 @@
+<RCC>
+  <qresource prefix="/telefam">
+    <file>icons/telefam_logo.svg</file>
+    <file>icons/ic_camera.svg</file>
+    <file>icons/ic_search.svg</file>
+    <file>icons/ic_moon.svg</file>
+    <file>icons/ic_sun.svg</file>
+    <file>icons/ic_bell.svg</file>
+    <file>icons/ic_more.svg</file>
+    <file>icons/ic_chats_red.svg</file>
+    <file>icons/ic_contacts.svg</file>
+    <file>icons/ic_feeds.svg</file>
+    <file>icons/ic_profile.svg</file>
+    <file>icons/ic_back_white.svg</file>
+    <file>icons/ic_plus_white.svg</file>
+    <file>icons/ic_person_add_white.svg</file>
+    <file>icons/ic_friends_red.svg</file>
+    <file>icons/ic_contacts_red.svg</file>
+    <file>icons/ic_chats_outline.svg</file>
+    <file>icons/ic_close_white.svg</file>
+    <file>icons/ic_photos_tab.svg</file>
+    <file>icons/ic_video_tab.svg</file>
+    <file>icons/ic_music_note.svg</file>
+    <file>icons/ic_hashtag.svg</file>
+    <file>icons/ic_clapperboard.svg</file>
+    <file>icons/ic_play.svg</file>
+    <file>icons/ic_pause.svg</file>
+    <file>icons/ic_volume_off.svg</file>
+    <file>icons/ic_volume_on.svg</file>
+    <file>icons/ic_sparkle.svg</file>
+    <file>icons/ic_palette.svg</file>
+    <file>icons/ic_image_theme.svg</file>
+    <file>icons/ic_chevron_right.svg</file>
+    <file>icons/ic_check.svg</file>
+  </qresource>
+</RCC>

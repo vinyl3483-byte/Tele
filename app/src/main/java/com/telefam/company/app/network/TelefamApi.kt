@@ -1,0 +1,528 @@
+package com.telefam.company.app.network
+
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import com.squareup.moshi.Json
+import com.squareup.moshi.JsonClass
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import com.telefam.company.app.BuildConfig
+import com.telefam.company.app.core.NetworkQuality
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import okhttp3.MediaType
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.OkHttpClient
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
+import retrofit2.Response
+import retrofit2.Retrofit
+import retrofit2.converter.moshi.MoshiConverterFactory
+import retrofit2.http.Body
+import retrofit2.http.GET
+import retrofit2.http.Header
+import retrofit2.http.Multipart
+import retrofit2.http.POST
+import retrofit2.http.Part
+import retrofit2.http.Path
+import retrofit2.http.Query
+import java.io.InputStream
+import java.util.concurrent.TimeUnit
+
+@JsonClass(generateAdapter = true)
+data class SendOtpRequest(
+    val email: String,
+    @Json(name = "device_fingerprint") val deviceFingerprint: String,
+    @Json(name = "hardware_attestation") val hardwareAttestation: String,
+    @Json(name = "device_name") val deviceName: String,
+    val platform: String = "android"
+)
+
+@JsonClass(generateAdapter = true)
+data class SendOtpResponse(
+    val accepted: Boolean,
+    @Json(name = "cooldown_seconds") val cooldownSeconds: Long
+)
+
+@JsonClass(generateAdapter = true)
+data class VerifyOtpRequest(
+    val email: String,
+    val otp: String,
+    @Json(name = "magic_token") val magicToken: String? = null,
+    @Json(name = "device_fingerprint") val deviceFingerprint: String,
+    @Json(name = "hardware_attestation") val hardwareAttestation: String,
+    @Json(name = "device_name") val deviceName: String,
+    val platform: String = "android"
+)
+
+@JsonClass(generateAdapter = true)
+data class OAuthVerifyRequest(
+    @Json(name = "id_token") val idToken: String,
+    @Json(name = "device_fingerprint") val deviceFingerprint: String,
+    @Json(name = "hardware_attestation") val hardwareAttestation: String,
+    @Json(name = "device_name") val deviceName: String,
+    val platform: String = "android"
+)
+
+@JsonClass(generateAdapter = true)
+data class AuthSessionDto(
+    @Json(name = "access_token") val accessToken: String,
+    @Json(name = "refresh_token") val refreshToken: String,
+    @Json(name = "expires_in") val expiresIn: Long,
+    @Json(name = "user_id") val userId: String,
+    val email: String,
+    @Json(name = "display_name") val displayName: String,
+    @Json(name = "profile_completed") val profileCompleted: Boolean = false
+)
+
+@JsonClass(generateAdapter = true)
+data class AvatarUploadResponse(
+    @Json(name = "avatar_fingerprint_hash") val avatarFingerprintHash: String
+)
+
+@JsonClass(generateAdapter = true)
+data class ProfileSetupRequest(
+    @Json(name = "full_name") val fullName: String,
+    val username: String,
+    @Json(name = "country_iso") val countryIso: String,
+    @Json(name = "phone_number") val phoneNumber: String,
+    val gender: String,
+    @Json(name = "date_of_birth") val dateOfBirth: String,
+    val location: String,
+    val bio: String,
+    @Json(name = "avatar_fingerprint_hash") val avatarFingerprintHash: String = ""
+)
+
+@JsonClass(generateAdapter = true)
+data class ProfileSetupResponse(
+    @Json(name = "user_id") val userId: String,
+    @Json(name = "full_name") val fullName: String,
+    val username: String,
+    @Json(name = "profile_completed") val profileCompleted: Boolean
+)
+
+@JsonClass(generateAdapter = true)
+data class ConversationDto(
+    val id: String,
+    val title: String,
+    @Json(name = "updated_at") val updatedAt: Long
+)
+
+@JsonClass(generateAdapter = true)
+data class ConversationsListDto(
+    val conversations: List<ConversationDto> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class CreateConversationRequest(val title: String)
+
+@JsonClass(generateAdapter = true)
+data class MessageDto(
+    val id: String,
+    @Json(name = "conversation_id") val conversationId: String,
+    @Json(name = "sender_id") val senderId: String,
+    @Json(name = "client_mutation_id") val clientMutationId: String,
+    val body: String,
+    @Json(name = "created_at") val createdAt: Long
+)
+
+@JsonClass(generateAdapter = true)
+data class MessagesListDto(
+    val messages: List<MessageDto> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class MutationWireItem(
+    @Json(name = "mutation_id") val mutationId: String,
+    @Json(name = "action_type") val actionType: String,
+    val payload: Map<String, String>
+)
+
+@JsonClass(generateAdapter = true)
+data class SyncMutationsRequest(
+    val mutations: List<MutationWireItem>
+)
+
+@JsonClass(generateAdapter = true)
+data class SyncMutationsResponse(
+    @Json(name = "acked_ids") val ackedIds: List<String> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class ContactUserDto(
+    @Json(name = "user_id") val userId: String,
+    @Json(name = "full_name") val fullName: String,
+    val username: String,
+    val location: String = "",
+    @Json(name = "avatar_fingerprint_hash") val avatarFingerprintHash: String = "",
+    @Json(name = "is_following") val isFollowing: Boolean = false,
+    @Json(name = "follows_me") val followsMe: Boolean = false,
+    val relationship: String = "follow",
+    @Json(name = "risk_score") val riskScore: Int = 0
+)
+
+@JsonClass(generateAdapter = true)
+data class ContactsPageDto(
+    val contacts: List<ContactUserDto> = emptyList(),
+    @Json(name = "next_cursor") val nextCursor: String = "",
+    @Json(name = "has_more") val hasMore: Boolean = false
+)
+
+@JsonClass(generateAdapter = true)
+data class FollowActionRequest(
+    @Json(name = "target_user_id") val targetUserId: String,
+    val follow: Boolean
+)
+
+@JsonClass(generateAdapter = true)
+data class FollowActionResponse(
+    @Json(name = "target_user_id") val targetUserId: String,
+    @Json(name = "is_following") val isFollowing: Boolean,
+    @Json(name = "follows_me") val followsMe: Boolean,
+    val relationship: String,
+    @Json(name = "risk_score") val riskScore: Int = 0
+)
+
+@JsonClass(generateAdapter = true)
+data class MusicTrackDto(
+    @Json(name = "track_id") val trackId: String,
+    val title: String,
+    val artist: String,
+    @Json(name = "artwork_url") val artworkUrl: String = "",
+    @Json(name = "preview_url") val previewUrl: String = "",
+    @Json(name = "duration_sec") val durationSec: Int = 30
+)
+
+@JsonClass(generateAdapter = true)
+data class MusicSearchResponse(
+    val tracks: List<MusicTrackDto> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class HashtagDto(
+    val tag: String,
+    @Json(name = "post_count") val postCount: Long = 0L
+)
+
+@JsonClass(generateAdapter = true)
+data class HashtagSearchResponse(
+    val hashtags: List<HashtagDto> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class UploadedPhotoDto(
+    @Json(name = "media_id") val mediaId: String,
+    @Json(name = "renamed_filename") val renamedFilename: String = "",
+    @Json(name = "content_id") val contentId: String = "",
+    val width: Int = 0,
+    val height: Int = 0,
+    @Json(name = "perceptual_dhash") val perceptualDHash: String = ""
+)
+
+@JsonClass(generateAdapter = true)
+data class UploadPhotosResponse(
+    val media: List<UploadedPhotoDto> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class VideoQualityRenditionDto(
+    val label: String,
+    val width: Int = 0,
+    val height: Int = 0,
+    @Json(name = "bitrate_kbps") val bitrateKbps: Int = 0,
+    @Json(name = "object_key") val objectKey: String = ""
+)
+
+@JsonClass(generateAdapter = true)
+data class UploadedVideoDto(
+    @Json(name = "media_id") val mediaId: String,
+    @Json(name = "renamed_filename") val renamedFilename: String = "",
+    @Json(name = "content_id") val contentId: String = "",
+    @Json(name = "thumbnail_object_key") val thumbnailObjectKey: String = "",
+    @Json(name = "thumbnail_fingerprint") val thumbnailFingerprint: String = "",
+    @Json(name = "audio_fingerprint_hash") val audioFingerprintHash: String = "",
+    val width: Int = 0,
+    val height: Int = 0,
+    @Json(name = "duration_ms") val durationMs: Long = 0L,
+    @Json(name = "frame_count") val frameCount: Int = 0,
+    val qualities: List<VideoQualityRenditionDto> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class CreatePostRequest(
+    @Json(name = "post_type") val postType: String,
+    val body: String = "",
+    @Json(name = "bg_color_hex") val bgColorHex: String = "",
+    @Json(name = "bg_theme_id") val bgThemeId: String = "",
+    @Json(name = "font_family") val fontFamily: String = "classic",
+    @Json(name = "song_id") val songId: String = "",
+    @Json(name = "song_title") val songTitle: String = "",
+    @Json(name = "song_artist") val songArtist: String = "",
+    @Json(name = "song_preview_url") val songPreviewUrl: String = "",
+    @Json(name = "mute_original_audio") val muteOriginalAudio: Boolean = false,
+    @Json(name = "trim_start_ms") val trimStartMs: Long = 0L,
+    @Json(name = "trim_end_ms") val trimEndMs: Long = 0L,
+    @Json(name = "media_ids") val mediaIds: List<String> = emptyList(),
+    @Json(name = "tagged_user_ids") val taggedUserIds: List<String> = emptyList(),
+    val hashtags: List<String> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class CreatePostResponse(
+    @Json(name = "post_id") val postId: String,
+    @Json(name = "post_type") val postType: String,
+    @Json(name = "content_fingerprint_hash") val contentFingerprintHash: String = "",
+    val status: String = "published"
+)
+
+interface TelefamApiService {
+    @POST("/v1/auth/otp/send")
+    suspend fun sendOtp(@Body request: SendOtpRequest): Response<SendOtpResponse>
+
+    @POST("/v1/auth/otp/verify")
+    suspend fun verifyOtp(@Body request: VerifyOtpRequest): Response<AuthSessionDto>
+
+    @POST("/v1/auth/oauth/{provider}")
+    suspend fun verifyOAuth(
+        @Path("provider") provider: String,
+        @Body request: OAuthVerifyRequest
+    ): Response<AuthSessionDto>
+
+    @POST("/v1/profile/avatar")
+    suspend fun uploadAvatar(
+        @Header("Authorization") authHeader: String,
+        @Body imageBytes: RequestBody
+    ): Response<AvatarUploadResponse>
+
+    @POST("/v1/profile/setup")
+    suspend fun setupProfile(
+        @Header("Authorization") authHeader: String,
+        @Body request: ProfileSetupRequest
+    ): Response<ProfileSetupResponse>
+
+    @GET("/v1/contacts")
+    suspend fun listContacts(
+        @Header("Authorization") authHeader: String,
+        @Query("filter") filter: String = "all",
+        @Query("q") query: String = "",
+        @Query("cursor") cursor: String = "",
+        @Query("limit") limit: Int = 30
+    ): Response<ContactsPageDto>
+
+    @POST("/v1/contacts/follow")
+    suspend fun setFollowState(
+        @Header("Authorization") authHeader: String,
+        @Body request: FollowActionRequest
+    ): Response<FollowActionResponse>
+
+    @GET("/v1/conversations")
+    suspend fun listConversations(
+        @Header("Authorization") authHeader: String
+    ): Response<ConversationsListDto>
+
+    @POST("/v1/conversations")
+    suspend fun createConversation(
+        @Header("Authorization") authHeader: String,
+        @Body request: CreateConversationRequest
+    ): Response<ConversationDto>
+
+    @GET("/v1/conversations/{id}/messages")
+    suspend fun listMessages(
+        @Header("Authorization") authHeader: String,
+        @Path("id") conversationId: String,
+        @Query("since_ms") sinceMs: Long = 0L
+    ): Response<MessagesListDto>
+
+    @POST("/v1/sync/mutations")
+    suspend fun syncMutations(
+        @Header("Authorization") authHeader: String,
+        @Body request: SyncMutationsRequest
+    ): Response<SyncMutationsResponse>
+
+    @GET("/v1/music/search")
+    suspend fun searchMusic(
+        @Header("Authorization") authHeader: String,
+        @Query("q") query: String
+    ): Response<MusicSearchResponse>
+
+    @GET("/v1/hashtags/search")
+    suspend fun searchHashtags(
+        @Header("Authorization") authHeader: String,
+        @Query("q") query: String
+    ): Response<HashtagSearchResponse>
+
+    @Multipart
+    @POST("/v1/posts/media/photos")
+    suspend fun uploadPostPhotos(
+        @Header("Authorization") authHeader: String,
+        @Part photos: List<MultipartBody.Part>
+    ): Response<UploadPhotosResponse>
+
+    @Multipart
+    @POST("/v1/posts/media/video")
+    suspend fun uploadPostVideo(
+        @Header("Authorization") authHeader: String,
+        @Part video: MultipartBody.Part,
+        @Part thumbnail: MultipartBody.Part?,
+        @Part("trim_start_ms") trimStartMs: RequestBody,
+        @Part("trim_end_ms") trimEndMs: RequestBody,
+        @Part("thumbnail_at_ms") thumbnailAtMs: RequestBody,
+        @Part("mute_original_audio") muteOriginalAudio: RequestBody,
+        @Part("song_preview_url") songPreviewUrl: RequestBody
+    ): Response<UploadedVideoDto>
+
+    @POST("/v1/posts")
+    suspend fun createPost(
+        @Header("Authorization") authHeader: String,
+        @Body request: CreatePostRequest
+    ): Response<CreatePostResponse>
+}
+
+class CountingBytesRequestBody(
+    private val bytes: ByteArray,
+    private val mediaType: MediaType,
+    private val onProgress: (written: Long, total: Long) -> Unit
+) : RequestBody() {
+    override fun contentType(): MediaType = mediaType
+    override fun contentLength(): Long = bytes.size.toLong()
+    override fun writeTo(sink: BufferedSink) {
+        val total = bytes.size.toLong().coerceAtLeast(1L)
+        var offset = 0
+        val chunk = 16384
+        while (offset < bytes.size) {
+            val len = minOf(chunk, bytes.size - offset)
+            sink.write(bytes, offset, len)
+            offset += len
+            onProgress(offset.toLong(), total)
+        }
+    }
+}
+
+class CountingStreamRequestBody(
+    private val totalBytes: Long,
+    private val mediaType: MediaType,
+    private val openStream: () -> InputStream?,
+    private val onProgress: (written: Long, total: Long) -> Unit
+) : RequestBody() {
+    override fun contentType(): MediaType = mediaType
+    override fun contentLength(): Long = if (totalBytes > 0L) totalBytes else -1L
+    override fun writeTo(sink: BufferedSink) {
+        val stream = openStream() ?: throw IllegalStateException("Stream unavailable")
+        stream.use { input ->
+            val buf = ByteArray(32768)
+            var uploaded = 0L
+            val effectiveTotal = totalBytes.coerceAtLeast(1L)
+            while (true) {
+                val read = input.read(buf)
+                if (read == -1) break
+                sink.write(buf, 0, read)
+                uploaded += read
+                onProgress(uploaded, effectiveTotal)
+            }
+        }
+    }
+}
+
+object TelefamNetworkClient {
+    val moshi: Moshi = Moshi.Builder()
+        .addLast(KotlinJsonAdapterFactory())
+        .build()
+
+    private fun resolvedBaseUrl(): String {
+        val rawUrl = BuildConfig.TELEFAM_API_BASE_URL
+            .trim()
+            .ifBlank { "https://api.telefam.app" }
+            .let { if (it.endsWith("/")) it else "$it/" }
+        return if (rawUrl.startsWith("https://") || rawUrl.startsWith("http://")) {
+            rawUrl
+        } else {
+            "https://api.telefam.app/"
+        }
+    }
+
+    fun createService(uploadTimeoutSeconds: Long = 15L): TelefamApiService {
+        val baseUrl = resolvedBaseUrl()
+        val client = OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(uploadTimeoutSeconds, TimeUnit.SECONDS)
+            .writeTimeout(uploadTimeoutSeconds, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+            .build()
+
+        return runCatching {
+            Retrofit.Builder()
+                .baseUrl(baseUrl)
+                .client(client)
+                .addConverterFactory(MoshiConverterFactory.create(moshi))
+                .build()
+                .create(TelefamApiService::class.java)
+        }.getOrElse {
+            Retrofit.Builder()
+                .baseUrl("https://api.telefam.app/")
+                .client(client)
+                .addConverterFactory(MoshiConverterFactory.create(moshi))
+                .build()
+                .create(TelefamApiService::class.java)
+        }
+    }
+
+    fun jpegBody(bytes: ByteArray): RequestBody =
+        bytes.toRequestBody("image/jpeg".toMediaType())
+
+    fun textBody(value: String): RequestBody =
+        value.toRequestBody("text/plain".toMediaType())
+}
+
+class AndroidNetworkMonitor(context: Context) {
+    private val cm: ConnectivityManager? =
+        runCatching { context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager }.getOrNull()
+    private val _quality = MutableStateFlow(currentQuality())
+    val quality: StateFlow<NetworkQuality> = _quality.asStateFlow()
+
+    private val callback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            _quality.value = currentQuality()
+        }
+
+        override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+            _quality.value = evaluate(capabilities)
+        }
+
+        override fun onLost(network: Network) {
+            _quality.value = currentQuality()
+        }
+    }
+
+    init {
+        val manager = cm
+        if (manager != null) {
+            val req = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+            runCatching { manager.registerNetworkCallback(req, callback) }
+        }
+    }
+
+    private fun currentQuality(): NetworkQuality {
+        val manager = cm ?: return NetworkQuality.OFFLINE
+        return runCatching {
+            val active = manager.activeNetwork ?: return NetworkQuality.OFFLINE
+            val caps = manager.getNetworkCapabilities(active) ?: return NetworkQuality.OFFLINE
+            evaluate(caps)
+        }.getOrDefault(NetworkQuality.OFFLINE)
+    }
+
+    private fun evaluate(caps: NetworkCapabilities): NetworkQuality {
+        return if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+            NetworkQuality.ONLINE
+        } else {
+            NetworkQuality.OFFLINE
+        }
+    }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Telefam",
+  "description": "Telefam is an offline-first encrypted family and team messaging app with shared C++ core engine, multi-factor OTP/OAuth authentication, and cross-platform support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

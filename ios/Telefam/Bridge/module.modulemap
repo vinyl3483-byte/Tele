@@ -1,0 +1,4 @@
+module CTelefamCore {
+    header "../../../core/include/telefam_core.h"
+    export *
+}

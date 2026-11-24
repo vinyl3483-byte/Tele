@@ -1,0 +1,8 @@
+{application, telefam_realtime,
+ [{description, "Telefam OTP realtime router, offline mailbox, and rate limiter"},
+  {vsn, "1.0.0"},
+  {registered, [telefam_sup, telefam_rate_limiter, telefam_offline_mailbox]},
+  {mod, {telefam_app, []}},
+  {applications, [kernel, stdlib]},
+  {env, []}
+ ]}.

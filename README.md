@@ -1,11 +1,7 @@
-<div align="center">
+# Telefam Multi-Platform Workspace
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-
-  <h1>Built with AI Studio</h2>
-
-  <p>The fastest path from prompt to production with Gemini.</p>
-
-  <a href="https://aistudio.google.com/apps">Start building</a>
-
-</div>
+- `/core/`: Shared C++20 Telefam engine (`telefam_crypto`, `telefam_engine`, C ABI `telefam_core.h`) containing cryptography (AES-256-CTR + HMAC-SHA256 AEAD, HKDF, SHA-256), OTP cooldown state machine (`1m x3 -> 15m -> 1h -> 24h`), per-account/device/IP rate limiting, device/IP fingerprint canonicalization, error sanitization, and offline-first outbox queue.
+- `/android/` + `/app/`: Kotlin + Jetpack Compose Android app (`com.telefam.company.app`) + NDK JNI bridge (`android/CMakeLists.txt`, `android/jni/telefam_jni.cpp`) with Android Keystore AES-256-GCM encryption at rest, Credential Manager Google Sign-In, magic-link deep linking, adaptive phone/tablet/foldable UI, and R8 release obfuscation.
+- `/ios/`: Swift + SwiftUI app for iPhone, iPad, and Mac Catalyst (`TelefamApp`, `NavigationSplitView`) with C++ core interop (`module.modulemap`), Keychain AES master key protection, `NWPathMonitor` weak-network sync, and Sign in with Apple (`AuthenticationServices`).
+- `/desktop/`: C++20 + Qt 6 Quick/QML desktop client (`Windows`, `macOS`, `Linux`) linking `../core` directly with adaptive split-pane workspace.
+- `/backend/`: Go API gateway (`go-gateway/`), C++20 security & cryptographic engine (`cpp-security-engine/`), Erlang/OTP realtime session FSM & ETS rate-limiter/offline mailbox (`erlang-realtime/`), and PostgreSQL Row-Level Security schema (`sql/001_schema_and_rls.sql`).
