@@ -65,7 +65,11 @@ func Load() (*Config, error) {
 
 	addr := os.Getenv("TELEFAM_LISTEN_ADDR")
 	if addr == "" {
-		addr = ":8080"
+		port := os.Getenv("PORT")
+		if port == "" {
+			port = "8080"
+		}
+		addr = ":" + port
 	}
 
 	magicBase := os.Getenv("TELEFAM_MAGIC_LINK_BASE")

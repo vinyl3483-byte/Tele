@@ -48,6 +48,12 @@ func main() {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		healthCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+		if err := pool.Ping(healthCtx); err != nil {
+			middleware.WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
+			return
+		}
 		middleware.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 

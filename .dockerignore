@@ -1,0 +1,13 @@
+.git
+.github
+.gradle
+build
+captures
+.cxx
+.externalNativeBuild
+.idea
+**/node_modules
+**/_build
+**/target
+.env
+**/.env
