@@ -212,6 +212,29 @@ TELEFAM_API telefam_status_t telefam_compute_media_content_id(
     size_t out_len
 );
 
+/* Feed Aspect-Ratio & Formatting Helpers */
+typedef struct {
+    float width_px;
+    float height_px;
+    float aspect_ratio;
+    int32_t needs_ambient_backdrop;
+} telefam_feed_fit_t;
+
+TELEFAM_API void telefam_feed_compute_fit(
+    float container_w,
+    float container_h,
+    int32_t video_w,
+    int32_t video_h,
+    double explicit_ratio,
+    telefam_feed_fit_t* out_fit
+);
+
+TELEFAM_API void telefam_feed_format_count(
+    int64_t value,
+    char* out_buf,
+    size_t out_len
+);
+
 #ifdef __cplusplus
 }
 #endif

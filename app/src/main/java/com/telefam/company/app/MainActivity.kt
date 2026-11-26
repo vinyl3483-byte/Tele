@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -21,12 +22,21 @@ import androidx.core.view.WindowCompat
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import com.telefam.company.app.ui.HomeTab
 import com.telefam.company.app.ui.TelefamViewModel
+import com.telefam.company.app.ui.screens.AudioDiscoveryScreen
 import com.telefam.company.app.ui.screens.AuthScreen
+import com.telefam.company.app.ui.screens.FeedModalPlayerScreen
+import com.telefam.company.app.ui.screens.FeedSearchScreen
+import com.telefam.company.app.ui.screens.HashtagDiscoveryScreen
+import com.telefam.company.app.ui.screens.LiveComingSoonScreen
 import com.telefam.company.app.ui.screens.PostCreatorScreen
 import com.telefam.company.app.ui.screens.ProfileSetupScreen
 import com.telefam.company.app.ui.screens.WorkspaceScreen
@@ -37,7 +47,12 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: TelefamViewModel by viewModels {
         val app = application as TelefamApplication
-        TelefamViewModel.Factory(app.repository, app.networkMonitor)
+        TelefamViewModel.Factory(
+            app.repository,
+            app.feedRepository,
+            app.networkMonitor,
+            app.feedPlayerController
+        )
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -56,16 +71,42 @@ class MainActivity : ComponentActivity() {
             val conversations by viewModel.conversations.collectAsStateWithLifecycle()
             val messages by viewModel.messages.collectAsStateWithLifecycle()
             val contacts by viewModel.contacts.collectAsStateWithLifecycle()
+            val videoFeedState by viewModel.videoFeedState.collectAsStateWithLifecycle()
+            val feedPlaybackState by viewModel.feedPlaybackState.collectAsStateWithLifecycle()
             val view = LocalView.current
+            val lifecycleOwner = LocalLifecycleOwner.current
             val currentSession = state.session
+
+            DisposableEffect(lifecycleOwner) {
+                val observer = LifecycleEventObserver { _, event ->
+                    when (event) {
+                        Lifecycle.Event.ON_PAUSE -> viewModel.setAppForeground(false)
+                        Lifecycle.Event.ON_RESUME -> viewModel.setAppForeground(true)
+                        else -> Unit
+                    }
+                }
+                lifecycleOwner.lifecycle.addObserver(observer)
+                onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+            }
+
+            val isImmersiveDarkOverlay = currentSession != null &&
+                currentSession.profileCompleted &&
+                !state.isEditingProfile &&
+                !state.postComposer.isOpen &&
+                (
+                    state.activeTab == HomeTab.FEEDS ||
+                        videoFeedState.modalPlayer.isOpen ||
+                        videoFeedState.search.isOpen ||
+                        videoFeedState.hashtagDiscovery.isOpen ||
+                        videoFeedState.audioDiscovery.isOpen ||
+                        videoFeedState.isLiveScreenOpen
+                    )
 
             SideEffect {
                 val window = (view.context as? Activity)?.window ?: return@SideEffect
                 val controller = WindowCompat.getInsetsController(window, view)
-                // Top wave / top header bar across Auth, Profile Setup, Chats, and Contacts is Crimson (#C81010)
                 controller.isAppearanceLightStatusBars = false
-                // Bottom navigation / gesture bar adapts cleanly to dark vs light theme
-                controller.isAppearanceLightNavigationBars = !state.isDarkTheme
+                controller.isAppearanceLightNavigationBars = !state.isDarkTheme && !isImmersiveDarkOverlay
             }
 
             TelefamTheme(darkTheme = state.isDarkTheme) {
@@ -92,13 +133,16 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
-                    !currentSession.profileCompleted -> {
+                    !currentSession.profileCompleted || state.isEditingProfile -> {
                         ProfileSetupScreen(
                             state = state.profileSetup,
                             onUpdateField = viewModel::updateProfileField,
                             onAvatarCropped = viewModel::setCroppedAvatar,
                             onSubmit = viewModel::submitProfileSetup,
-                            onBack = viewModel::signOut
+                            onBack = {
+                                if (state.isEditingProfile) viewModel.closeEditProfile()
+                                else viewModel.signOut()
+                            }
                         )
                     }
 
@@ -134,32 +178,107 @@ class MainActivity : ComponentActivity() {
                     }
 
                     else -> {
-                        WorkspaceScreen(
-                            session = currentSession,
-                            isDarkTheme = state.isDarkTheme,
-                            activeTab = state.activeTab,
-                            conversations = conversations,
-                            selectedConversationId = state.selectedConversationId,
-                            messages = messages,
-                            contacts = contacts,
-                            contactFilter = state.contactFilter,
-                            contactSearchQuery = state.contactSearchQuery,
-                            isLoadingContacts = state.isLoadingContacts,
-                            hasMoreContacts = state.hasMoreContacts,
-                            contactsToastMessage = state.contactsToastMessage,
-                            onToggleTheme = viewModel::toggleTheme,
-                            onSelectTab = viewModel::selectHomeTab,
-                            onSelectConversation = viewModel::selectConversation,
-                            onCreateConversation = viewModel::createConversation,
-                            onSendMessage = viewModel::sendMessage,
-                            onDeleteMessage = viewModel::deleteMessage,
-                            onSelectContactFilter = viewModel::selectContactFilter,
-                            onContactSearchQueryChange = viewModel::updateContactSearchQuery,
-                            onToggleFollow = viewModel::toggleFollow,
-                            onLoadMoreContacts = viewModel::loadMoreContacts,
-                            onClearContactsToast = viewModel::clearContactsToast,
-                            onOpenPost = viewModel::openPostComposer
-                        )
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            WorkspaceScreen(
+                                session = currentSession,
+                                isDarkTheme = state.isDarkTheme,
+                                activeTab = state.activeTab,
+                                homeSearchQuery = state.searchQuery,
+                                conversations = conversations,
+                                selectedConversationId = state.selectedConversationId,
+                                messages = messages,
+                                contacts = contacts,
+                                contactFilter = state.contactFilter,
+                                contactSearchQuery = state.contactSearchQuery,
+                                isLoadingContacts = state.isLoadingContacts,
+                                hasMoreContacts = state.hasMoreContacts,
+                                contactsToastMessage = state.contactsToastMessage,
+                                myProfile = state.myProfile,
+                                videoFeedState = videoFeedState,
+                                feedPlaybackState = feedPlaybackState,
+                                feedController = viewModel.feedController,
+                                notifications = state.notifications,
+                                onHomeSearchQueryChange = viewModel::updateSearchQuery,
+                                onToggleTheme = viewModel::toggleTheme,
+                                onSelectTab = viewModel::selectHomeTab,
+                                onSelectConversation = viewModel::selectConversation,
+                                onCreateConversation = viewModel::createConversation,
+                                onSendMessage = viewModel::sendMessage,
+                                onDeleteMessage = viewModel::deleteMessage,
+                                onSelectContactFilter = viewModel::selectContactFilter,
+                                onContactSearchQueryChange = viewModel::updateContactSearchQuery,
+                                onToggleFollow = viewModel::toggleFollow,
+                                onLoadMoreContacts = viewModel::loadMoreContacts,
+                                onClearContactsToast = viewModel::clearContactsToast,
+                                onOpenPost = viewModel::openPostComposer,
+                                onOpenNotifications = viewModel::refreshNotifications,
+                                onMarkNotificationsRead = viewModel::markNotificationsRead,
+                                onSyncNow = viewModel::syncNow,
+                                onEditProfile = viewModel::openEditProfile,
+                                onSignOut = viewModel::signOut
+                            )
+
+                            when {
+                                videoFeedState.modalPlayer.isOpen -> {
+                                    FeedModalPlayerScreen(
+                                        state = videoFeedState.modalPlayer,
+                                        playbackState = feedPlaybackState,
+                                        feedController = viewModel.feedController,
+                                        onClose = { viewModel.feedController.closeModalFeedPlayer() }
+                                    )
+                                }
+
+                                videoFeedState.audioDiscovery.isOpen -> {
+                                    AudioDiscoveryScreen(
+                                        state = videoFeedState.audioDiscovery,
+                                        feedController = viewModel.feedController,
+                                        onClose = {
+                                            viewModel.feedController.closeAudioDiscovery()
+                                            if (state.activeTab == HomeTab.FEEDS && !videoFeedState.search.isOpen) {
+                                                viewModel.feedController.playActiveFeedVideoIfAvailable()
+                                            }
+                                        }
+                                    )
+                                }
+
+                                videoFeedState.hashtagDiscovery.isOpen -> {
+                                    HashtagDiscoveryScreen(
+                                        state = videoFeedState.hashtagDiscovery,
+                                        feedController = viewModel.feedController,
+                                        onClose = {
+                                            viewModel.feedController.closeHashtagDiscovery()
+                                            if (state.activeTab == HomeTab.FEEDS && !videoFeedState.search.isOpen) {
+                                                viewModel.feedController.playActiveFeedVideoIfAvailable()
+                                            }
+                                        }
+                                    )
+                                }
+
+                                videoFeedState.search.isOpen -> {
+                                    FeedSearchScreen(
+                                        state = videoFeedState.search,
+                                        feedController = viewModel.feedController,
+                                        onClose = {
+                                            viewModel.feedController.closeSearch()
+                                            if (state.activeTab == HomeTab.FEEDS) {
+                                                viewModel.feedController.playActiveFeedVideoIfAvailable()
+                                            }
+                                        }
+                                    )
+                                }
+
+                                videoFeedState.isLiveScreenOpen -> {
+                                    LiveComingSoonScreen(
+                                        onClose = {
+                                            viewModel.feedController.closeLiveScreen()
+                                            if (state.activeTab == HomeTab.FEEDS) {
+                                                viewModel.feedController.playActiveFeedVideoIfAvailable()
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }

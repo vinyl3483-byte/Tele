@@ -829,4 +829,70 @@ telefam_status_t telefam_compute_media_content_id(
     return TELEFAM_OK;
 }
 
+void telefam_feed_compute_fit(
+    float container_w,
+    float container_h,
+    int32_t video_w,
+    int32_t video_h,
+    double explicit_ratio,
+    telefam_feed_fit_t* out_fit
+) {
+    if (!out_fit) return;
+    if (container_w <= 0.0f || container_h <= 0.0f) {
+        out_fit->width_px = 0.0f;
+        out_fit->height_px = 0.0f;
+        out_fit->aspect_ratio = 9.0f / 16.0f;
+        out_fit->needs_ambient_backdrop = 0;
+        return;
+    }
+    double ratio = explicit_ratio;
+    if (video_w > 0 && video_h > 0) {
+        ratio = static_cast<double>(video_w) / static_cast<double>(video_h);
+    } else if (!(ratio > 0.05 && ratio < 10.0)) {
+        ratio = 9.0 / 16.0;
+    }
+    const float video_ratio = static_cast<float>(std::clamp(ratio, 0.25, 4.0));
+    const float container_ratio = container_w / container_h;
+    float fit_w = 0.0f;
+    float fit_h = 0.0f;
+    if (video_ratio > container_ratio) {
+        fit_w = container_w;
+        fit_h = container_w / video_ratio;
+    } else {
+        fit_h = container_h;
+        fit_w = container_h * video_ratio;
+    }
+    const float diff = std::abs(video_ratio - container_ratio) / std::max(0.1f, container_ratio);
+    out_fit->width_px = fit_w;
+    out_fit->height_px = fit_h;
+    out_fit->aspect_ratio = video_ratio;
+    out_fit->needs_ambient_backdrop = (diff > 0.14f) ? 1 : 0;
+}
+
+void telefam_feed_format_count(int64_t value, char* out_buf, size_t out_len) {
+    if (!out_buf || out_len == 0) return;
+    const int64_t safe = value < 0 ? 0 : value;
+    if (safe < 1000LL) {
+        std::snprintf(out_buf, out_len, "%lld", static_cast<long long>(safe));
+        return;
+    }
+    auto format_unit = [out_buf, out_len](double divisor, char suffix) {
+        const long long tenths = static_cast<long long>(std::floor(divisor));
+        const long long whole = tenths / 10LL;
+        const long long frac = tenths % 10LL;
+        if (frac == 0LL) {
+            std::snprintf(out_buf, out_len, "%lld%c", whole, suffix);
+        } else {
+            std::snprintf(out_buf, out_len, "%lld.%lld%c", whole, frac, suffix);
+        }
+    };
+    if (safe < 1000000LL) {
+        format_unit(static_cast<double>(safe) / 100.0, 'K');
+    } else if (safe < 1000000000LL) {
+        format_unit(static_cast<double>(safe) / 100000.0, 'M');
+    } else {
+        format_unit(static_cast<double>(safe) / 100000000.0, 'B');
+    }
+}
+
 } // extern "C"

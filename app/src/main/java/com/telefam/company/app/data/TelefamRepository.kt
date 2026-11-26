@@ -26,12 +26,18 @@ import com.telefam.company.app.network.CountingStreamRequestBody
 import com.telefam.company.app.network.CreateConversationRequest
 import com.telefam.company.app.network.CreatePostRequest
 import com.telefam.company.app.network.CreatePostResponse
+import com.telefam.company.app.network.FeedPostDto
+import com.telefam.company.app.network.FeedPostsResponse
 import com.telefam.company.app.network.FollowActionRequest
 import com.telefam.company.app.network.HashtagDto
 import com.telefam.company.app.network.MusicTrackDto
 import com.telefam.company.app.network.MutationWireItem
+import com.telefam.company.app.network.MyProfileDto
+import com.telefam.company.app.network.NotificationDto
+import com.telefam.company.app.network.NotificationsResponse
 import com.telefam.company.app.network.OAuthVerifyRequest
 import com.telefam.company.app.network.ProfileSetupRequest
+import com.telefam.company.app.network.RefreshSessionRequest
 import com.telefam.company.app.network.SendOtpRequest
 import com.telefam.company.app.network.SyncMutationsRequest
 import com.telefam.company.app.network.TelefamApiService
@@ -146,6 +152,9 @@ class TelefamRepository(
     val deviceIdentity: DeviceIdentity
 ) {
     private val sessionAdapter = TelefamNetworkClient.moshi.adapter(AuthSessionDto::class.java)
+    private val myProfileAdapter = TelefamNetworkClient.moshi.adapter(MyProfileDto::class.java)
+    private val feedResponseAdapter = TelefamNetworkClient.moshi.adapter(FeedPostsResponse::class.java)
+    private val notificationsResponseAdapter = TelefamNetworkClient.moshi.adapter(NotificationsResponse::class.java)
     private val mapType = Types.newParameterizedType(Map::class.java, String::class.java, String::class.java)
     private val payloadAdapter = TelefamNetworkClient.moshi.adapter<Map<String, String>>(mapType)
     private val queuedPostAdapter = TelefamNetworkClient.moshi.adapter(QueuedPostPayload::class.java)
@@ -227,11 +236,134 @@ class TelefamRepository(
 
     suspend fun clearSession() {
         dao.deleteKv("session_json")
+        dao.deleteKv("my_profile_json")
+        dao.deleteKv("feed_cache_json")
+        dao.deleteKv("notifications_json")
         dao.clearConversations()
         dao.clearMessages()
         dao.clearOutbox()
         dao.clearCachedContacts()
         dao.clearQueuedPosts()
+        dao.clearAllCachedFeedVideos()
+    }
+
+    suspend fun logoutFromServer() {
+        val session = loadEncryptedSession()
+        if (session != null && session.accessToken.isNotBlank()) {
+            runCatching { api.logoutSession("Bearer ${session.accessToken}") }
+        }
+        clearSession()
+    }
+
+    suspend fun refreshSessionToken(): AuthSessionDto? {
+        val current = loadEncryptedSession() ?: return null
+        if (current.refreshToken.isBlank()) return null
+        return runCatching {
+            val res = api.refreshSession(
+                RefreshSessionRequest(
+                    refreshToken = current.refreshToken,
+                    deviceFingerprint = deviceIdentity.deviceFingerprint,
+                    hardwareAttestation = deviceIdentity.hardwareAttestationHash
+                )
+            )
+            val body = res.body()
+            if (res.isSuccessful && body != null) {
+                saveEncryptedSession(body)
+                body
+            } else {
+                null
+            }
+        }.getOrNull()
+    }
+
+    internal suspend fun <T> withAuthedApi(call: suspend (String) -> retrofit2.Response<T>): retrofit2.Response<T>? {
+        val session = loadEncryptedSession() ?: return null
+        val first = call("Bearer ${session.accessToken}")
+        if (first.code() != 401) return first
+        val refreshed = refreshSessionToken() ?: return first
+        return call("Bearer ${refreshed.accessToken}")
+    }
+
+    suspend fun loadCachedMyProfile(): MyProfileDto? {
+        val raw = dao.getKv("my_profile_json") ?: return null
+        return runCatching { myProfileAdapter.fromJson(vault.decryptString(raw)) }.getOrNull()
+    }
+
+    suspend fun fetchMyProfile(): RepoResult<MyProfileDto> {
+        return try {
+            val res = withAuthedApi { auth -> api.getMyProfile(auth) }
+                ?: return RepoResult.Failure(bridge.sanitizeError(401))
+            val body = res.body()
+            if (res.isSuccessful && body != null) {
+                dao.putKv(EncryptedKvEntity("my_profile_json", vault.encryptString(myProfileAdapter.toJson(body))))
+                RepoResult.Success(body)
+            } else {
+                RepoResult.Failure(bridge.sanitizeError(res.code()))
+            }
+        } catch (_: Exception) {
+            RepoResult.Failure(bridge.sanitizeError(0))
+        }
+    }
+
+    suspend fun loadCachedFeedPosts(): List<FeedPostDto> {
+        val raw = dao.getKv("feed_cache_json") ?: return emptyList()
+        return runCatching {
+            feedResponseAdapter.fromJson(vault.decryptString(raw))?.posts.orEmpty()
+        }.getOrDefault(emptyList())
+    }
+
+    suspend fun fetchFeedPosts(query: String): RepoResult<List<FeedPostDto>> {
+        return try {
+            val trimmed = query.trim()
+            val res = withAuthedApi { auth -> api.listFeedPosts(auth, trimmed, 30) }
+                ?: return RepoResult.Failure(bridge.sanitizeError(401))
+            val body = res.body()
+            if (res.isSuccessful && body != null) {
+                if (trimmed.isEmpty()) {
+                    dao.putKv(EncryptedKvEntity("feed_cache_json", vault.encryptString(feedResponseAdapter.toJson(body))))
+                }
+                RepoResult.Success(body.posts)
+            } else {
+                RepoResult.Failure(bridge.sanitizeError(res.code()))
+            }
+        } catch (_: Exception) {
+            RepoResult.Failure(bridge.sanitizeError(0))
+        }
+    }
+
+    suspend fun loadCachedNotifications(): List<NotificationDto> {
+        val raw = dao.getKv("notifications_json") ?: return emptyList()
+        return runCatching {
+            notificationsResponseAdapter.fromJson(vault.decryptString(raw))?.notifications.orEmpty()
+        }.getOrDefault(emptyList())
+    }
+
+    suspend fun fetchNotifications(): RepoResult<List<NotificationDto>> {
+        return try {
+            val res = withAuthedApi { auth -> api.listNotifications(auth) }
+                ?: return RepoResult.Failure(bridge.sanitizeError(401))
+            val body = res.body()
+            if (res.isSuccessful && body != null) {
+                dao.putKv(
+                    EncryptedKvEntity(
+                        "notifications_json",
+                        vault.encryptString(notificationsResponseAdapter.toJson(body))
+                    )
+                )
+                RepoResult.Success(body.notifications)
+            } else {
+                RepoResult.Failure(bridge.sanitizeError(res.code()))
+            }
+        } catch (_: Exception) {
+            RepoResult.Failure(bridge.sanitizeError(0))
+        }
+    }
+
+    suspend fun markNotificationsRead(): Boolean {
+        return runCatching {
+            val res = withAuthedApi { auth -> api.markNotificationsRead(auth) } ?: return false
+            res.isSuccessful
+        }.getOrDefault(false)
     }
 
     fun suggestDeviceCountryIso(): String {

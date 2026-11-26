@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -30,12 +31,15 @@ const (
 )
 
 type VideoQualityRendition struct {
-	Label     string `json:"label"`
-	Width     int    `json:"width"`
-	Height    int    `json:"height"`
-	Bitrate   string `json:"bitrate"`
-	ObjectKey string `json:"object_key"`
-	ByteSize  int64  `json:"byte_size"`
+	Label          string `json:"label"`
+	Width          int    `json:"width"`
+	Height         int    `json:"height"`
+	Bitrate        string `json:"bitrate"`
+	BitrateKbps    int    `json:"bitrate_kbps"`
+	Codec          string `json:"codec"`
+	ObjectKey      string `json:"object_key"`
+	HLSPlaylistKey string `json:"hls_playlist_key"`
+	ByteSize       int64  `json:"byte_size"`
 }
 
 type FrameFingerprintRecord struct {
@@ -61,9 +65,11 @@ type VideoSanitizeOptions struct {
 type SanitizedVideoResult struct {
 	RenamedVideoFilename string
 	PrimaryObjectKey     string
+	HLSMasterObjectKey   string
 	ThumbnailObjectKey   string
 	ThumbnailFingerprint string
 	MimeType             string
+	Codec                string
 	ByteSize             int64
 	Width                int
 	Height               int
@@ -147,8 +153,9 @@ func SanitizeVideoInIsolation(ctx context.Context, rawVideoPath string, rawSize 
 
 	var width, height int
 	var durationMs int64
+	var detectedCodec string
 	if fpErr == nil {
-		width, height, durationMs = probeVideoMetadata(procCtx, ffprobePath, rawVideoPath)
+		width, height, durationMs, detectedCodec = probeVideoMetadata(procCtx, ffprobePath, rawVideoPath)
 	}
 	if width <= 0 {
 		width = 1280
@@ -158,6 +165,9 @@ func SanitizeVideoInIsolation(ctx context.Context, rawVideoPath string, rawSize 
 	}
 	if durationMs <= 0 {
 		durationMs = 15000
+	}
+	if detectedCodec == "" {
+		detectedCodec = "h264"
 	}
 
 	var songPath string
@@ -169,50 +179,105 @@ func SanitizeVideoInIsolation(ctx context.Context, rawVideoPath string, rawSize 
 	}
 
 	qualities := []VideoQualityRendition{}
+	hlsMasterKey := ""
+	baseStem := strings.TrimSuffix(opts.RenamedVideoFile, ".mp4")
+	hlsBaseRel := filepath.ToSlash(filepath.Join("hls", baseStem))
+	hlsDir, hlsDirErr := ConfineStoragePath(opts.MediaStorageBaseDir, "hls", baseStem)
+	if hlsDirErr == nil {
+		_ = os.MkdirAll(hlsDir, 0o750)
+	}
+
 	if ffErr == nil {
-		// Primary re-encoded clean H.264/AAC MP4 (strips metadata, applies trim, mutes/merges audio)
-		if err := transcodeCleanMP4(procCtx, ffmpegPath, rawVideoPath, outPrimary, songPath, opts, 1080); err != nil {
-			// Fallback copy-repack without shell
+		// Primary re-encoded clean H.264/AAC MP4 preserving original aspect ratio
+		if err := transcodeCleanMP4(procCtx, ffmpegPath, rawVideoPath, outPrimary, songPath, opts, height); err != nil {
 			_ = copyFileSafe(rawVideoPath, outPrimary)
 		}
 
-		// Adaptive quality ladder (1080p, 720p, 480p, 360p) capped at source height
+		// Adaptive quality ladder (1080p, 720p, 480p, 360p, 240p) preserving original aspect ratio
 		for _, spec := range []struct {
-			label   string
-			height  int
-			bitrate string
+			label       string
+			height      int
+			bitrate     string
+			bitrateKbps int
 		}{
-			{"1080p", 1080, "4500k"},
-			{"720p", 720, "2400k"},
-			{"480p", 480, "1200k"},
-			{"360p", 360, "700k"},
+			{"1080p", 1080, "4500k", 4500},
+			{"720p", 720, "2400k", 2400},
+			{"480p", 480, "1200k", 1200},
+			{"360p", 360, "700k", 700},
+			{"240p", 240, "400k", 400},
 		} {
-			if height < spec.height && spec.height > 480 {
+			// Avoid upscaling unnecessarily except keeping 240p/360p low-bandwidth tiers available
+			if height < spec.height && spec.height > 360 {
 				continue
 			}
-			rendName := strings.TrimSuffix(opts.RenamedVideoFile, ".mp4") + "_" + spec.label + ".mp4"
+			rendName := baseStem + "_" + spec.label + ".mp4"
 			rendPath, pErr := ConfineStoragePath(opts.MediaStorageBaseDir, "videos", rendName)
 			if pErr != nil {
 				continue
 			}
-			if spec.label == "720p" && height <= 720 {
-				_ = copyFileSafe(outPrimary, rendPath)
-			} else if err := transcodeCleanMP4(procCtx, ffmpegPath, outPrimary, rendPath, "", VideoSanitizeOptions{MuteOriginalAudio: opts.MuteOriginalAudio}, spec.height); err != nil {
+			if err := transcodeCleanMP4(procCtx, ffmpegPath, outPrimary, rendPath, "", VideoSanitizeOptions{MuteOriginalAudio: opts.MuteOriginalAudio}, spec.height); err != nil {
 				continue
+			}
+			hlsVariantKey := ""
+			if hlsDirErr == nil {
+				vPlaylist := filepath.Join(hlsDir, spec.label+".m3u8")
+				vSegPattern := filepath.Join(hlsDir, spec.label+"_%04d.ts")
+				hlsCmd := exec.CommandContext(procCtx, ffmpegPath,
+					"-y", "-hide_banner", "-loglevel", "error",
+					"-i", rendPath,
+					"-c", "copy",
+					"-hls_time", "2",
+					"-hls_playlist_type", "vod",
+					"-hls_flags", "independent_segments",
+					"-hls_segment_filename", vSegPattern,
+					vPlaylist,
+				)
+				if hlsCmd.Run() == nil {
+					hlsVariantKey = hlsBaseRel + "/" + spec.label + ".m3u8"
+				}
 			}
 			if info, stErr := os.Stat(rendPath); stErr == nil {
 				scaledW := (width * spec.height) / height
 				if scaledW%2 == 1 {
 					scaledW++
 				}
+				if scaledW < 2 {
+					scaledW = 2
+				}
 				qualities = append(qualities, VideoQualityRendition{
-					Label:     spec.label,
-					Width:     scaledW,
-					Height:    spec.height,
-					Bitrate:   spec.bitrate,
-					ObjectKey: "videos/" + rendName,
-					ByteSize:  info.Size(),
+					Label:          spec.label,
+					Width:          scaledW,
+					Height:         spec.height,
+					Bitrate:        spec.bitrate,
+					BitrateKbps:    spec.bitrateKbps,
+					Codec:          "h264",
+					ObjectKey:      "videos/" + rendName,
+					HLSPlaylistKey: hlsVariantKey,
+					ByteSize:       info.Size(),
 				})
+			}
+		}
+
+		// Write HLS multivariant master playlist referencing all generated variants
+		if hlsDirErr == nil && len(qualities) > 0 {
+			var master strings.Builder
+			master.WriteString("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-INDEPENDENT-SEGMENTS\n")
+			wroteVariant := false
+			for _, q := range qualities {
+				if q.HLSPlaylistKey == "" {
+					continue
+				}
+				master.WriteString(fmt.Sprintf(
+					"#EXT-X-STREAM-INF:BANDWIDTH=%d,RESOLUTION=%dx%d,CODECS=\"avc1.42e01e,mp4a.40.2\"\n%s.m3u8\n",
+					q.BitrateKbps*1000, q.Width, q.Height, q.Label,
+				))
+				wroteVariant = true
+			}
+			if wroteVariant {
+				masterPath := filepath.Join(hlsDir, "master.m3u8")
+				if os.WriteFile(masterPath, []byte(master.String()), 0o640) == nil {
+					hlsMasterKey = hlsBaseRel + "/master.m3u8"
+				}
 			}
 		}
 	} else {
@@ -221,12 +286,14 @@ func SanitizeVideoInIsolation(ctx context.Context, rawVideoPath string, rawSize 
 		}
 		if info, stErr := os.Stat(outPrimary); stErr == nil {
 			qualities = append(qualities, VideoQualityRendition{
-				Label:     "720p",
-				Width:     width,
-				Height:    height,
-				Bitrate:   "2400k",
-				ObjectKey: "videos/" + opts.RenamedVideoFile,
-				ByteSize:  info.Size(),
+				Label:       "720p",
+				Width:       width,
+				Height:      height,
+				Bitrate:     "2400k",
+				BitrateKbps: 2400,
+				Codec:       detectedCodec,
+				ObjectKey:   "videos/" + opts.RenamedVideoFile,
+				ByteSize:    info.Size(),
 			})
 		}
 	}
@@ -274,9 +341,11 @@ func SanitizeVideoInIsolation(ctx context.Context, rawVideoPath string, rawSize 
 	return &SanitizedVideoResult{
 		RenamedVideoFilename: opts.RenamedVideoFile,
 		PrimaryObjectKey:     "videos/" + opts.RenamedVideoFile,
+		HLSMasterObjectKey:   hlsMasterKey,
 		ThumbnailObjectKey:   "thumbs/" + opts.RenamedThumbFile,
 		ThumbnailFingerprint: thumbFP,
 		MimeType:             "video/mp4",
+		Codec:                "h264",
 		ByteSize:             finalInfo.Size(),
 		Width:                width,
 		Height:               height,
@@ -288,7 +357,7 @@ func SanitizeVideoInIsolation(ctx context.Context, rawVideoPath string, rawSize 
 	}, nil
 }
 
-func probeVideoMetadata(ctx context.Context, ffprobeBin, filePath string) (int, int, int64) {
+func probeVideoMetadata(ctx context.Context, ffprobeBin, filePath string) (int, int, int64, string) {
 	cmd := exec.CommandContext(ctx, ffprobeBin,
 		"-v", "quiet",
 		"-print_format", "json",
@@ -298,11 +367,12 @@ func probeVideoMetadata(ctx context.Context, ffprobeBin, filePath string) (int, 
 	)
 	out, err := cmd.Output()
 	if err != nil {
-		return 0, 0, 0
+		return 0, 0, 0, ""
 	}
 	var parsed struct {
 		Streams []struct {
 			CodecType string `json:"codec_type"`
+			CodecName string `json:"codec_name"`
 			Width     int    `json:"width"`
 			Height    int    `json:"height"`
 		} `json:"streams"`
@@ -311,12 +381,14 @@ func probeVideoMetadata(ctx context.Context, ffprobeBin, filePath string) (int, 
 		} `json:"format"`
 	}
 	if json.Unmarshal(out, &parsed) != nil {
-		return 0, 0, 0
+		return 0, 0, 0, ""
 	}
 	var w, h int
+	var codec string
 	for _, s := range parsed.Streams {
 		if s.CodecType == "video" && s.Width > 0 && s.Height > 0 {
 			w, h = s.Width, s.Height
+			codec = strings.ToLower(strings.TrimSpace(s.CodecName))
 			break
 		}
 	}
@@ -324,7 +396,7 @@ func probeVideoMetadata(ctx context.Context, ffprobeBin, filePath string) (int, 
 	if secs, err := strconv.ParseFloat(strings.TrimSpace(parsed.Format.Duration), 64); err == nil && secs > 0 {
 		durMs = int64(secs * 1000.0)
 	}
-	return w, h, durMs
+	return w, h, durMs, codec
 }
 
 func transcodeCleanMP4(
@@ -556,9 +628,25 @@ func computeVideoAndAudioFrameFingerprints(
 	return records, hex.EncodeToString(audioMac.Sum(nil))
 }
 
+func isBlockedIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
+		return true
+	}
+	// Block CGNAT 100.64.0.0/10
+	if v4 := ip.To4(); v4 != nil {
+		if v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127 {
+			return true
+		}
+	}
+	return false
+}
+
 func downloadAllowlistedSongPreview(ctx context.Context, rawURL string) (string, error) {
 	parsed, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil || parsed.Scheme != "https" {
+	if err != nil || parsed.Scheme != "https" || parsed.User != nil {
 		return "", errors.New("invalid song preview url")
 	}
 	host := strings.ToLower(parsed.Hostname())
@@ -569,15 +657,38 @@ func downloadAllowlistedSongPreview(ctx context.Context, rawURL string) (string,
 	if !allowed {
 		return "", errors.New("host not allowlisted")
 	}
-	if ip := net.ParseIP(host); ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()) {
+	if ip := net.ParseIP(host); ip != nil && isBlockedIP(ip) {
 		return "", errors.New("private ip blocked")
+	}
+
+	dialer := &net.Dialer{
+		Timeout: 5 * time.Second,
+		Control: func(network, address string, c syscall.RawConn) error {
+			hostStr, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return err
+			}
+			ip := net.ParseIP(hostStr)
+			if isBlockedIP(ip) {
+				return errors.New("blocked remote peer address")
+			}
+			return nil
+		},
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
 	if err != nil {
 		return "", err
 	}
-	client := &http.Client{Timeout: 8 * time.Second}
+	client := &http.Client{
+		Timeout: 8 * time.Second,
+		Transport: &http.Transport{
+			DialContext: dialer.DialContext,
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return errors.New("redirects disabled for media fetch")
+		},
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err

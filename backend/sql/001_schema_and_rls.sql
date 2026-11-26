@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS users (
     google_sub_hash CHAR(64),
     apple_sub_hash CHAR(64),
     profile_completed BOOLEAN NOT NULL DEFAULT FALSE,
+    is_suspended BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -235,8 +236,16 @@ CREATE POLICY members_select ON conversation_members
 
 CREATE POLICY members_insert ON conversation_members
     FOR INSERT WITH CHECK (
-        user_id = telefam_current_user_id()
-        OR EXISTS (
+        EXISTS (
+            SELECT 1 FROM conversations c
+            WHERE c.id = conversation_members.conversation_id
+              AND c.created_by = telefam_current_user_id()
+        )
+    );
+
+CREATE POLICY members_creator_delete ON conversation_members
+    FOR DELETE USING (
+        EXISTS (
             SELECT 1 FROM conversations c
             WHERE c.id = conversation_members.conversation_id
               AND c.created_by = telefam_current_user_id()
@@ -380,6 +389,7 @@ BEGIN
     JOIN user_profiles up ON up.user_id = u.id
     LEFT JOIN user_risk_scores urs ON urs.user_id = u.id
     WHERE u.profile_completed = TRUE
+      AND COALESCE(u.is_suspended, FALSE) = FALSE
       AND u.id <> p_viewer_id
     ORDER BY up.updated_at DESC, u.id ASC;
 END;

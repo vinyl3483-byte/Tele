@@ -2,6 +2,10 @@ package com.telefam.company.app
 
 import com.telefam.company.app.core.NetworkQuality
 import com.telefam.company.app.core.TelefamNativeBridge
+import com.telefam.company.app.feed.FeedAspectRatioMath
+import com.telefam.company.app.feed.FeedFormatter
+import com.telefam.company.app.feed.FeedReportReason
+import com.telefam.company.app.feed.FeedVideoVisibility
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -137,5 +141,42 @@ class TelefamCoreUnitTest {
         assertEquals(64, cid1.length)
         assertEquals(cid1, cid2)
         assertFalse(cid1 == cidDifferent)
+    }
+
+    @Test
+    fun feedAspectRatioMath_preservesOriginalRatiosAndTriggersAmbientBackdrop() {
+        val containerW = 1080f
+        val containerH = 1920f
+
+        val portrait = FeedAspectRatioMath.computeFittedSize(containerW, containerH, 1080, 1920, 0.5625)
+        assertEquals(1080f, portrait.widthPx, 1f)
+        assertEquals(1920f, portrait.heightPx, 1f)
+        assertFalse(portrait.needsAmbientBackdrop)
+
+        val landscape = FeedAspectRatioMath.computeFittedSize(containerW, containerH, 1920, 1080, 1.777)
+        assertEquals(1080f, landscape.widthPx, 1f)
+        assertEquals(607.5f, landscape.heightPx, 1f)
+        assertTrue(landscape.needsAmbientBackdrop)
+
+        val square = FeedAspectRatioMath.computeFittedSize(containerW, containerH, 1080, 1080, 1.0)
+        assertEquals(1080f, square.widthPx, 1f)
+        assertEquals(1080f, square.heightPx, 1f)
+        assertTrue(square.needsAmbientBackdrop)
+
+        val ultrawide = FeedAspectRatioMath.computeFittedSize(containerW, containerH, 2560, 1080, 2.37)
+        assertEquals(1080f, ultrawide.widthPx, 1f)
+        assertTrue(ultrawide.heightPx < 500f)
+        assertTrue(ultrawide.needsAmbientBackdrop)
+    }
+
+    @Test
+    fun feedFormatter_formatsCountsAndExtractsHashtagsAndUrls() {
+        assertEquals("999", FeedFormatter.formatCount(999L))
+        assertEquals("128.4K", FeedFormatter.formatCount(128_450L))
+        assertEquals("2.1M", FeedFormatter.formatCount(2_140_000L))
+        assertEquals(listOf("nightvibes", "citylights"), FeedFormatter.extractHashtags("City #NightVibes ❤️ #citylights https://telefam.app/v/1"))
+        assertEquals(listOf("https://telefam.app/v/1"), FeedFormatter.extractUrls("Check https://telefam.app/v/1 #explore"))
+        assertEquals(8, FeedReportReason.entries.size)
+        assertEquals(FeedVideoVisibility.PRIVATE, FeedVideoVisibility.fromApi("private"))
     }
 }

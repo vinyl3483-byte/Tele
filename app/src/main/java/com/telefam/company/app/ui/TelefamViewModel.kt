@@ -11,15 +11,22 @@ import com.telefam.company.app.core.NetworkQuality
 import com.telefam.company.app.data.ContactModel
 import com.telefam.company.app.data.ConversationModel
 import com.telefam.company.app.data.ExtractedPhotoItem
+import com.telefam.company.app.data.FeedRepository
 import com.telefam.company.app.data.MessageModel
 import com.telefam.company.app.data.QueuedPostPayload
 import com.telefam.company.app.data.RepoResult
 import com.telefam.company.app.data.TelefamRepository
 import com.telefam.company.app.data.VideoFrameItem
+import com.telefam.company.app.feed.FeedPlaybackState
+import com.telefam.company.app.feed.FeedPlayerController
 import com.telefam.company.app.network.AndroidNetworkMonitor
+import com.telefam.company.app.network.AudioSummaryDto
 import com.telefam.company.app.network.AuthSessionDto
+import com.telefam.company.app.network.FeedPostDto
 import com.telefam.company.app.network.HashtagDto
 import com.telefam.company.app.network.MusicTrackDto
+import com.telefam.company.app.network.MyProfileDto
+import com.telefam.company.app.network.NotificationDto
 import com.telefam.company.app.network.ProfileSetupRequest
 import com.telefam.company.app.ui.theme.PostFontStyle
 import kotlinx.coroutines.Job
@@ -48,7 +55,9 @@ enum class AuthStep {
 
 enum class HomeTab {
     CHATS,
-    CONTACTS
+    CONTACTS,
+    FEEDS,
+    PROFILE
 }
 
 enum class ContactFilter(val apiValue: String) {
@@ -180,12 +189,20 @@ data class TelefamUiState(
     val hasMoreContacts: Boolean = false,
     val contactsNextCursor: String = "",
     val contactsToastMessage: String? = null,
+    val isEditingProfile: Boolean = false,
+    val myProfile: MyProfileDto? = null,
+    val feedPosts: List<FeedPostDto> = emptyList(),
+    val isLoadingFeed: Boolean = false,
+    val notifications: List<NotificationDto> = emptyList(),
+    val isLoadingNotifications: Boolean = false,
     val postComposer: PostComposerState = PostComposerState()
 )
 
 class TelefamViewModel(
     private val repository: TelefamRepository,
-    networkMonitor: AndroidNetworkMonitor
+    feedRepository: FeedRepository,
+    networkMonitor: AndroidNetworkMonitor,
+    private val feedPlayerController: FeedPlayerController
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(TelefamUiState())
@@ -193,6 +210,17 @@ class TelefamViewModel(
 
     val deviceDisplayName: String = repository.deviceIdentity.deviceName
     val networkQuality: StateFlow<NetworkQuality> = networkMonitor.quality
+
+    val feedController: FeedController = FeedController(
+        scope = viewModelScope,
+        feedRepository = feedRepository,
+        playerController = feedPlayerController,
+        networkQualityProvider = { networkQuality.value },
+        onContactsChanged = { refreshContacts(reset = true) },
+        onUseAudioInPost = { audio -> openPostComposerWithAudio(audio) }
+    )
+    val videoFeedState: StateFlow<VideoFeedUiState> = feedController.state
+    val feedPlaybackState: StateFlow<FeedPlaybackState> = feedPlayerController.playbackState
 
     val conversations: StateFlow<List<ConversationModel>> =
         repository.observeConversations()
@@ -243,6 +271,9 @@ class TelefamViewModel(
             val saved = repository.loadEncryptedSession()
             val dark = repository.loadThemeDark()
             val suggestedIso = repository.suggestDeviceCountryIso()
+            val cachedProfile = repository.loadCachedMyProfile()
+            val cachedFeed = repository.loadCachedFeedPosts()
+            val cachedNotifs = repository.loadCachedNotifications()
             val prefill = saved?.let { seedProfileSetup(it.email, suggestedIso) }
                 ?: ProfileSetupState(countryIso = suggestedIso)
             _uiState.update {
@@ -250,12 +281,19 @@ class TelefamViewModel(
                     initialized = true,
                     isDarkTheme = dark,
                     session = saved,
+                    myProfile = cachedProfile,
+                    feedPosts = cachedFeed,
+                    notifications = cachedNotifs,
                     profileSetup = prefill
                 )
             }
             if (saved != null && saved.profileCompleted) {
                 repository.syncPendingAndRefresh(networkQuality.value, _uiState.value.selectedConversationId)
                 refreshContacts(reset = true)
+                refreshMyProfile()
+                refreshFeedPosts()
+                feedController.loadInitialFromCacheAndRefresh(true)
+                refreshNotifications()
                 if (networkQuality.value == NetworkQuality.ONLINE) {
                     repository.flushQueuedPosts()
                 }
@@ -267,6 +305,10 @@ class TelefamViewModel(
                 if (quality == NetworkQuality.ONLINE && s != null && s.profileCompleted) {
                     repository.syncPendingAndRefresh(quality, _uiState.value.selectedConversationId)
                     refreshContacts(reset = true)
+                    refreshMyProfile()
+                    refreshFeedPosts()
+                    feedController.loadInitialFromCacheAndRefresh(true)
+                    refreshNotifications()
                     repository.flushQueuedPosts()
                 }
             }
@@ -275,7 +317,20 @@ class TelefamViewModel(
 
     override fun onCleared() {
         stopSongPreviewInternal()
+        feedPlayerController.pause()
         super.onCleared()
+    }
+
+    fun setAppForeground(foreground: Boolean) {
+        val activeTab = _uiState.value.activeTab
+        val modalOpen = feedController.state.value.modalPlayer.isOpen
+        if (!foreground) {
+            feedPlayerController.setAppForeground(false)
+        } else {
+            feedPlayerController.setAppForeground(
+                activeTab == HomeTab.FEEDS || modalOpen
+            )
+        }
     }
 
     fun toggleTheme() {
@@ -349,6 +404,7 @@ class TelefamViewModel(
                     }
                     if (sess.profileCompleted) {
                         repository.syncPendingAndRefresh(networkQuality.value, null)
+                        feedController.loadInitialFromCacheAndRefresh(true)
                     }
                 }
                 is RepoResult.Failure -> {
@@ -375,6 +431,7 @@ class TelefamViewModel(
                     }
                     if (sess.profileCompleted) {
                         repository.syncPendingAndRefresh(networkQuality.value, null)
+                        feedController.loadInitialFromCacheAndRefresh(true)
                     }
                 }
                 is RepoResult.Failure -> {
@@ -481,10 +538,12 @@ class TelefamViewModel(
                     _uiState.update {
                         it.copy(
                             session = res.data,
+                            isEditingProfile = false,
                             profileSetup = it.profileSetup.copy(isSubmitting = false)
                         )
                     }
                     repository.syncPendingAndRefresh(networkQuality.value, null)
+                    refreshMyProfile()
                 }
                 is RepoResult.Failure -> {
                     _uiState.update {
@@ -499,13 +558,131 @@ class TelefamViewModel(
 
     fun updateSearchQuery(query: String) {
         _uiState.update { it.copy(searchQuery = query) }
+        if (_uiState.value.activeTab == HomeTab.FEEDS) {
+            refreshFeedPosts(query)
+        }
     }
 
     fun selectHomeTab(tab: HomeTab) {
         _uiState.update { it.copy(activeTab = tab) }
-        if (tab == HomeTab.CONTACTS) {
-            refreshContacts(reset = true)
+        if (tab != HomeTab.FEEDS && !feedController.state.value.modalPlayer.isOpen) {
+            feedPlayerController.pause()
         }
+        when (tab) {
+            HomeTab.CHATS -> Unit
+            HomeTab.CONTACTS -> refreshContacts(reset = true)
+            HomeTab.FEEDS -> {
+                feedPlayerController.setAppForeground(true)
+                val activeVideos = feedController.state.value.activeChannel.videos
+                if (activeVideos.isEmpty()) {
+                    feedController.refreshActiveFeed()
+                } else {
+                    feedController.playActiveFeedVideoIfAvailable()
+                }
+            }
+            HomeTab.PROFILE -> {
+                refreshMyProfile()
+                feedController.refreshSavedVideos()
+                feedController.refreshSafetyPreferences()
+            }
+        }
+    }
+
+    fun syncNow() {
+        val sess = _uiState.value.session ?: return
+        if (!sess.profileCompleted) return
+        viewModelScope.launch {
+            repository.syncPendingAndRefresh(networkQuality.value, _uiState.value.selectedConversationId)
+            refreshContacts(reset = true)
+            refreshFeedPosts()
+            refreshMyProfile()
+            refreshNotifications()
+            if (networkQuality.value == NetworkQuality.ONLINE) {
+                repository.flushQueuedPosts()
+            }
+        }
+    }
+
+    fun refreshMyProfile() {
+        val sess = _uiState.value.session ?: return
+        if (!sess.profileCompleted || networkQuality.value == NetworkQuality.OFFLINE) return
+        viewModelScope.launch {
+            when (val res = repository.fetchMyProfile()) {
+                is RepoResult.Success -> _uiState.update { it.copy(myProfile = res.data) }
+                is RepoResult.Failure -> Unit
+            }
+        }
+    }
+
+    fun refreshFeedPosts(query: String = _uiState.value.searchQuery) {
+        val sess = _uiState.value.session ?: return
+        if (!sess.profileCompleted || networkQuality.value == NetworkQuality.OFFLINE) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingFeed = true) }
+            when (val res = repository.fetchFeedPosts(query)) {
+                is RepoResult.Success -> _uiState.update {
+                    it.copy(feedPosts = res.data, isLoadingFeed = false)
+                }
+                is RepoResult.Failure -> _uiState.update { it.copy(isLoadingFeed = false) }
+            }
+        }
+    }
+
+    fun refreshNotifications() {
+        val sess = _uiState.value.session ?: return
+        if (!sess.profileCompleted || networkQuality.value == NetworkQuality.OFFLINE) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingNotifications = true) }
+            when (val res = repository.fetchNotifications()) {
+                is RepoResult.Success -> _uiState.update {
+                    it.copy(notifications = res.data, isLoadingNotifications = false)
+                }
+                is RepoResult.Failure -> _uiState.update { it.copy(isLoadingNotifications = false) }
+            }
+        }
+    }
+
+    fun markNotificationsRead() {
+        viewModelScope.launch {
+            if (repository.markNotificationsRead()) {
+                _uiState.update { st ->
+                    st.copy(notifications = st.notifications.map { it.copy(isRead = true) })
+                }
+            }
+        }
+    }
+
+    fun openEditProfile() {
+        val existing = _uiState.value.myProfile
+        val suggestedIso = existing?.countryIso?.takeIf { it.isNotBlank() } ?: repository.suggestDeviceCountryIso()
+        val dobParts = existing?.dateOfBirth?.split("-")
+        val by = dobParts?.getOrNull(0)?.toIntOrNull()
+        val bm = dobParts?.getOrNull(1)?.toIntOrNull()
+        val bd = dobParts?.getOrNull(2)?.toIntOrNull()
+        _uiState.update { st ->
+            st.copy(
+                isEditingProfile = true,
+                profileSetup = ProfileSetupState(
+                    fullName = existing?.fullName?.takeIf { it.isNotBlank() } ?: st.session?.displayName.orEmpty(),
+                    username = existing?.username.orEmpty(),
+                    countryIso = suggestedIso,
+                    phoneNumber = existing?.phoneNumber.orEmpty(),
+                    gender = existing?.gender.orEmpty(),
+                    birthYear = by,
+                    birthMonth = bm,
+                    birthDay = bd,
+                    location = existing?.location.orEmpty(),
+                    bio = existing?.bio.orEmpty(),
+                    avatarBitmap = st.profileSetup.avatarBitmap,
+                    avatarFingerprintHash = existing?.avatarFingerprintHash.orEmpty()
+                )
+            )
+        }
+        refreshMyProfile()
+    }
+
+    fun closeEditProfile() {
+        _uiState.update { it.copy(isEditingProfile = false) }
     }
 
     fun selectContactFilter(filter: ContactFilter) {
@@ -610,6 +787,7 @@ class TelefamViewModel(
     }
 
     fun openPostComposer() {
+        feedPlayerController.pause()
         _uiState.update {
             it.copy(
                 postComposer = it.postComposer.copy(
@@ -628,10 +806,36 @@ class TelefamViewModel(
         }
     }
 
+    fun openPostComposerWithAudio(audio: AudioSummaryDto) {
+        feedPlayerController.pause()
+        val track = MusicTrackDto(
+            trackId = audio.externalTrackId.ifBlank { audio.audioId },
+            title = audio.title,
+            artist = audio.artist,
+            artworkUrl = audio.artworkUrl,
+            previewUrl = audio.previewUrl,
+            durationSec = ((audio.durationMs / 1000L).toInt()).coerceAtLeast(15)
+        )
+        _uiState.update {
+            it.copy(
+                postComposer = PostComposerState(
+                    isOpen = true,
+                    mode = PostTabMode.VIDEO,
+                    selectedSong = track
+                )
+            )
+        }
+        searchSongs(audio.title)
+        searchHashtags("")
+    }
+
     fun closePostComposer() {
         stopSongPreviewInternal()
         _uiState.update {
             it.copy(postComposer = PostComposerState())
+        }
+        if (_uiState.value.activeTab == HomeTab.FEEDS) {
+            feedController.playActiveFeedVideoIfAvailable()
         }
     }
 
@@ -1044,6 +1248,8 @@ class TelefamViewModel(
                     }
                     delay(750L)
                     closePostComposer()
+                    refreshFeedPosts()
+                    feedController.refreshActiveFeed()
                 }
                 is RepoResult.Failure -> {
                     _uiState.update {
@@ -1062,7 +1268,8 @@ class TelefamViewModel(
     fun signOut() {
         viewModelScope.launch {
             stopSongPreviewInternal()
-            repository.clearSession()
+            feedController.resetOnSignOut()
+            repository.logoutFromServer()
             val dark = _uiState.value.isDarkTheme
             _uiState.update {
                 TelefamUiState(initialized = true, isDarkTheme = dark)
@@ -1086,11 +1293,13 @@ class TelefamViewModel(
 
     class Factory(
         private val repository: TelefamRepository,
-        private val networkMonitor: AndroidNetworkMonitor
+        private val feedRepository: FeedRepository,
+        private val networkMonitor: AndroidNetworkMonitor,
+        private val feedPlayerController: FeedPlayerController
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return TelefamViewModel(repository, networkMonitor) as T
+            return TelefamViewModel(repository, feedRepository, networkMonitor, feedPlayerController) as T
         }
     }
 }

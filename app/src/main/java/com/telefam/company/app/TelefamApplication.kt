@@ -2,8 +2,11 @@ package com.telefam.company.app
 
 import android.app.Application
 import com.telefam.company.app.core.TelefamNativeBridge
+import com.telefam.company.app.data.FeedRepository
 import com.telefam.company.app.data.TelefamRepository
 import com.telefam.company.app.data.local.TelefamDatabase
+import com.telefam.company.app.feed.FeedPlayerController
+import com.telefam.company.app.feed.Media3FeedPlaybackController
 import com.telefam.company.app.network.AndroidNetworkMonitor
 import com.telefam.company.app.network.TelefamNetworkClient
 import com.telefam.company.app.security.TelefamCryptoVault
@@ -11,7 +14,11 @@ import com.telefam.company.app.security.TelefamCryptoVault
 class TelefamApplication : Application() {
     lateinit var repository: TelefamRepository
         private set
+    lateinit var feedRepository: FeedRepository
+        private set
     lateinit var networkMonitor: AndroidNetworkMonitor
+        private set
+    lateinit var feedPlayerController: FeedPlayerController
         private set
 
     override fun onCreate() {
@@ -32,6 +39,13 @@ class TelefamApplication : Application() {
             bridge = bridge,
             deviceIdentity = deviceIdentity
         )
+        feedRepository = FeedRepository(
+            coreRepo = repository,
+            dao = db.dao(),
+            api = api,
+            vault = vault
+        )
         networkMonitor = AndroidNetworkMonitor(this)
+        feedPlayerController = Media3FeedPlaybackController(this)
     }
 }

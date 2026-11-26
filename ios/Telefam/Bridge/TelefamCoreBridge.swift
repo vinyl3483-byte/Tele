@@ -243,4 +243,41 @@ final class TelefamCoreBridge {
         )
         return String(cString: out)
     }
+
+    struct FeedFittedSize {
+        let width: CGFloat
+        let height: CGFloat
+        let aspectRatio: CGFloat
+        let needsAmbientBackdrop: Bool
+    }
+
+    static func computeFeedFit(
+        containerWidth: CGFloat,
+        containerHeight: CGFloat,
+        videoWidth: Int,
+        videoHeight: Int,
+        explicitRatio: Double
+    ) -> FeedFittedSize {
+        var fit = telefam_feed_fit_t()
+        telefam_feed_compute_fit(
+            Float(containerWidth),
+            Float(containerHeight),
+            Int32(videoWidth),
+            Int32(videoHeight),
+            explicitRatio,
+            &fit
+        )
+        return FeedFittedSize(
+            width: CGFloat(fit.width_px),
+            height: CGFloat(fit.height_px),
+            aspectRatio: CGFloat(fit.aspect_ratio),
+            needsAmbientBackdrop: fit.needs_ambient_backdrop == 1
+        )
+    }
+
+    static func formatFeedCount(_ value: Int64) -> String {
+        var buf = [CChar](repeating: 0, count: 24)
+        telefam_feed_format_count(value, &buf, buf.count)
+        return String(cString: buf)
+    }
 }

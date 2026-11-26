@@ -15,7 +15,7 @@ ApplicationWindow {
         anchors.fill: parent
         sourceComponent: !telefam.authenticated
             ? authComp
-            : (!telefam.profileCompleted ? profileComp : workspaceComp)
+            : ((!telefam.profileCompleted || telefam.isEditingProfile) ? profileComp : workspaceComp)
     }
 
     Component {

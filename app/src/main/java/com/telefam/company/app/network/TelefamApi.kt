@@ -108,6 +108,68 @@ data class ProfileSetupResponse(
 )
 
 @JsonClass(generateAdapter = true)
+data class RefreshSessionRequest(
+    @Json(name = "refresh_token") val refreshToken: String,
+    @Json(name = "device_fingerprint") val deviceFingerprint: String,
+    @Json(name = "hardware_attestation") val hardwareAttestation: String,
+    val platform: String = "android"
+)
+
+@JsonClass(generateAdapter = true)
+data class MyProfileDto(
+    @Json(name = "user_id") val userId: String = "",
+    val email: String = "",
+    @Json(name = "full_name") val fullName: String = "",
+    val username: String = "",
+    @Json(name = "country_iso") val countryIso: String = "",
+    @Json(name = "phone_number") val phoneNumber: String = "",
+    val gender: String = "",
+    @Json(name = "date_of_birth") val dateOfBirth: String = "",
+    val location: String = "",
+    val bio: String = "",
+    @Json(name = "avatar_fingerprint_hash") val avatarFingerprintHash: String = "",
+    @Json(name = "profile_completed") val profileCompleted: Boolean = false
+)
+
+@JsonClass(generateAdapter = true)
+data class FeedPostDto(
+    @Json(name = "post_id") val postId: String,
+    @Json(name = "author_id") val authorId: String = "",
+    @Json(name = "author_name") val authorName: String = "",
+    @Json(name = "author_handle") val authorHandle: String = "",
+    @Json(name = "post_type") val postType: String = "text",
+    val body: String = "",
+    @Json(name = "bg_color_hex") val bgColorHex: String = "",
+    @Json(name = "bg_theme_id") val bgThemeId: String = "",
+    @Json(name = "font_family") val fontFamily: String = "classic",
+    @Json(name = "song_title") val songTitle: String = "",
+    @Json(name = "song_artist") val songArtist: String = "",
+    @Json(name = "media_count") val mediaCount: Int = 0,
+    val hashtags: List<String> = emptyList(),
+    @Json(name = "created_at") val createdAt: Long = 0L
+)
+
+@JsonClass(generateAdapter = true)
+data class FeedPostsResponse(
+    val posts: List<FeedPostDto> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class NotificationDto(
+    val id: String,
+    val kind: String = "",
+    @Json(name = "actor_name") val actorName: String = "",
+    val message: String = "",
+    @Json(name = "is_read") val isRead: Boolean = false,
+    @Json(name = "created_at") val createdAt: Long = 0L
+)
+
+@JsonClass(generateAdapter = true)
+data class NotificationsResponse(
+    val notifications: List<NotificationDto> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
 data class ConversationDto(
     val id: String,
     val title: String,
@@ -276,9 +338,199 @@ data class CreatePostRequest(
 @JsonClass(generateAdapter = true)
 data class CreatePostResponse(
     @Json(name = "post_id") val postId: String,
+    @Json(name = "video_id") val videoId: String = "",
     @Json(name = "post_type") val postType: String,
     @Json(name = "content_fingerprint_hash") val contentFingerprintHash: String = "",
     val status: String = "published"
+)
+
+@JsonClass(generateAdapter = true)
+data class StreamVariantDto(
+    @Json(name = "quality_label") val qualityLabel: String = "auto",
+    val width: Int = 0,
+    val height: Int = 0,
+    @Json(name = "bitrate_kbps") val bitrateKbps: Int = 0,
+    val codec: String = "h264",
+    val container: String = "hls",
+    @Json(name = "signed_url") val signedUrl: String = ""
+)
+
+@JsonClass(generateAdapter = true)
+data class AudioSummaryDto(
+    @Json(name = "audio_id") val audioId: String = "",
+    @Json(name = "external_track_id") val externalTrackId: String = "",
+    val title: String = "Original sound",
+    val artist: String = "",
+    @Json(name = "artwork_url") val artworkUrl: String = "",
+    @Json(name = "preview_url") val previewUrl: String = "",
+    @Json(name = "duration_ms") val durationMs: Long = 0L,
+    @Json(name = "is_original") val isOriginal: Boolean = true,
+    @Json(name = "usage_count") val usageCount: Long = 0L
+)
+
+@JsonClass(generateAdapter = true)
+data class FeedVideoDto(
+    @Json(name = "video_id") val videoId: String,
+    @Json(name = "post_id") val postId: String = "",
+    @Json(name = "creator_id") val creatorId: String = "",
+    @Json(name = "creator_name") val creatorName: String = "",
+    @Json(name = "creator_username") val creatorUsername: String = "",
+    @Json(name = "creator_avatar_hash") val creatorAvatarHash: String = "",
+    @Json(name = "is_following_creator") val isFollowingCreator: Boolean = false,
+    @Json(name = "is_owner") val isOwner: Boolean = false,
+    val title: String = "",
+    val description: String = "",
+    @Json(name = "recommendation_label") val recommendationLabel: String = "",
+    @Json(name = "original_width") val originalWidth: Int = 720,
+    @Json(name = "original_height") val originalHeight: Int = 1280,
+    @Json(name = "aspect_ratio") val aspectRatio: Double = 9.0 / 16.0,
+    @Json(name = "duration_ms") val durationMs: Long = 0L,
+    val codec: String = "h264",
+    @Json(name = "file_size") val fileSize: Long = 0L,
+    val visibility: String = "public",
+    @Json(name = "thumbnail_url") val thumbnailUrl: String = "",
+    @Json(name = "stream_url") val streamUrl: String = "",
+    @Json(name = "fallback_mp4_url") val fallbackMp4Url: String = "",
+    @Json(name = "stream_type") val streamType: String = "mp4",
+    @Json(name = "url_expires_at") val urlExpiresAt: Long = 0L,
+    val variants: List<StreamVariantDto> = emptyList(),
+    val audio: AudioSummaryDto = AudioSummaryDto(),
+    val hashtags: List<String> = emptyList(),
+    @Json(name = "likes_count") val likesCount: Long = 0L,
+    @Json(name = "comments_count") val commentsCount: Long = 0L,
+    @Json(name = "shares_count") val sharesCount: Long = 0L,
+    @Json(name = "saves_count") val savesCount: Long = 0L,
+    @Json(name = "reposts_count") val repostsCount: Long = 0L,
+    @Json(name = "views_count") val viewsCount: Long = 0L,
+    @Json(name = "is_liked") val isLiked: Boolean = false,
+    @Json(name = "is_saved") val isSaved: Boolean = false,
+    @Json(name = "is_reposted") val isReposted: Boolean = false,
+    @Json(name = "created_at") val createdAt: Long = 0L
+)
+
+@JsonClass(generateAdapter = true)
+data class VideoFeedPageDto(
+    val videos: List<FeedVideoDto> = emptyList(),
+    @Json(name = "next_cursor") val nextCursor: String = "",
+    @Json(name = "has_more") val hasMore: Boolean = false
+)
+
+@JsonClass(generateAdapter = true)
+data class RefreshedStreamDto(
+    @Json(name = "video_id") val videoId: String,
+    @Json(name = "stream_url") val streamUrl: String = "",
+    @Json(name = "fallback_mp4_url") val fallbackMp4Url: String = "",
+    @Json(name = "thumbnail_url") val thumbnailUrl: String = "",
+    @Json(name = "stream_type") val streamType: String = "mp4",
+    @Json(name = "url_expires_at") val urlExpiresAt: Long = 0L,
+    val variants: List<StreamVariantDto> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class WatchProgressRequest(
+    @Json(name = "watch_duration_ms") val watchDurationMs: Long,
+    @Json(name = "last_position_ms") val lastPositionMs: Long,
+    @Json(name = "completion_pct") val completionPct: Double,
+    @Json(name = "rewatch_delta") val rewatchDelta: Int = 0
+)
+
+@JsonClass(generateAdapter = true)
+data class VideoLikeResponse(
+    @Json(name = "likes_count") val likesCount: Long = 0L,
+    @Json(name = "is_liked") val isLiked: Boolean = false
+)
+
+@JsonClass(generateAdapter = true)
+data class VideoSaveResponse(
+    @Json(name = "saves_count") val savesCount: Long = 0L,
+    @Json(name = "is_saved") val isSaved: Boolean = false
+)
+
+@JsonClass(generateAdapter = true)
+data class VideoShareRequest(val channel: String = "link")
+
+@JsonClass(generateAdapter = true)
+data class VideoShareResponse(
+    @Json(name = "shares_count") val sharesCount: Long = 0L
+)
+
+@JsonClass(generateAdapter = true)
+data class VideoRepostResponse(
+    @Json(name = "reposts_count") val repostsCount: Long = 0L,
+    @Json(name = "is_reposted") val isReposted: Boolean = false
+)
+
+@JsonClass(generateAdapter = true)
+data class VideoReportRequest(
+    val reason: String,
+    val details: String = ""
+)
+
+@JsonClass(generateAdapter = true)
+data class UpdateOwnerVideoRequest(
+    val title: String? = null,
+    val description: String? = null,
+    val visibility: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class HashtagDiscoveryDto(
+    val tag: String,
+    @Json(name = "video_count") val videoCount: Long = 0L,
+    @Json(name = "views_count") val viewsCount: Long = 0L,
+    val videos: List<FeedVideoDto> = emptyList(),
+    @Json(name = "next_cursor") val nextCursor: String = "",
+    @Json(name = "has_more") val hasMore: Boolean = false
+)
+
+@JsonClass(generateAdapter = true)
+data class AudioDiscoveryDto(
+    val audio: AudioSummaryDto,
+    val videos: List<FeedVideoDto> = emptyList(),
+    @Json(name = "next_cursor") val nextCursor: String = "",
+    @Json(name = "has_more") val hasMore: Boolean = false
+)
+
+@JsonClass(generateAdapter = true)
+data class CreatorSearchDto(
+    @Json(name = "user_id") val userId: String,
+    @Json(name = "full_name") val fullName: String = "",
+    val username: String = "",
+    @Json(name = "avatar_fingerprint_hash") val avatarFingerprintHash: String = "",
+    @Json(name = "is_following") val isFollowing: Boolean = false
+)
+
+@JsonClass(generateAdapter = true)
+data class RecentSearchDto(
+    val id: String,
+    val query: String
+)
+
+@JsonClass(generateAdapter = true)
+data class FeedSearchResponseDto(
+    val query: String = "",
+    val videos: List<FeedVideoDto> = emptyList(),
+    val hashtags: List<HashtagDto> = emptyList(),
+    val creators: List<CreatorSearchDto> = emptyList(),
+    val audios: List<AudioSummaryDto> = emptyList(),
+    @Json(name = "recent_searches") val recentSearches: List<RecentSearchDto> = emptyList(),
+    val trending: List<String> = emptyList(),
+    @Json(name = "next_cursor") val nextCursor: String = "",
+    @Json(name = "has_more") val hasMore: Boolean = false
+)
+
+@JsonClass(generateAdapter = true)
+data class SafetyUserDto(
+    @Json(name = "user_id") val userId: String,
+    @Json(name = "full_name") val fullName: String = "",
+    val username: String = "",
+    @Json(name = "avatar_fingerprint_hash") val avatarFingerprintHash: String = ""
+)
+
+@JsonClass(generateAdapter = true)
+data class SafetyPreferencesDto(
+    @Json(name = "muted_users") val mutedUsers: List<SafetyUserDto> = emptyList(),
+    @Json(name = "blocked_users") val blockedUsers: List<SafetyUserDto> = emptyList()
 )
 
 interface TelefamApiService {
@@ -294,6 +546,15 @@ interface TelefamApiService {
         @Body request: OAuthVerifyRequest
     ): Response<AuthSessionDto>
 
+    @POST("/v1/auth/refresh")
+    suspend fun refreshSession(@Body request: RefreshSessionRequest): Response<AuthSessionDto>
+
+    @POST("/v1/auth/logout")
+    suspend fun logoutSession(@Header("Authorization") authHeader: String): Response<Unit>
+
+    @GET("/v1/profile/me")
+    suspend fun getMyProfile(@Header("Authorization") authHeader: String): Response<MyProfileDto>
+
     @POST("/v1/profile/avatar")
     suspend fun uploadAvatar(
         @Header("Authorization") authHeader: String,
@@ -305,6 +566,16 @@ interface TelefamApiService {
         @Header("Authorization") authHeader: String,
         @Body request: ProfileSetupRequest
     ): Response<ProfileSetupResponse>
+
+    @GET("/v1/notifications")
+    suspend fun listNotifications(
+        @Header("Authorization") authHeader: String
+    ): Response<NotificationsResponse>
+
+    @POST("/v1/notifications/read")
+    suspend fun markNotificationsRead(
+        @Header("Authorization") authHeader: String
+    ): Response<Unit>
 
     @GET("/v1/contacts")
     suspend fun listContacts(
@@ -377,11 +648,192 @@ interface TelefamApiService {
         @Part("song_preview_url") songPreviewUrl: RequestBody
     ): Response<UploadedVideoDto>
 
+    @GET("/v1/posts/feed")
+    suspend fun listFeedPosts(
+        @Header("Authorization") authHeader: String,
+        @Query("q") query: String = "",
+        @Query("limit") limit: Int = 30
+    ): Response<FeedPostsResponse>
+
     @POST("/v1/posts")
     suspend fun createPost(
         @Header("Authorization") authHeader: String,
         @Body request: CreatePostRequest
     ): Response<CreatePostResponse>
+
+    @GET("/v1/feed/for-you")
+    suspend fun getForYouFeed(
+        @Header("Authorization") authHeader: String,
+        @Query("cursor") cursor: String = "",
+        @Query("limit") limit: Int = 15
+    ): Response<VideoFeedPageDto>
+
+    @GET("/v1/feed/following")
+    suspend fun getFollowingFeed(
+        @Header("Authorization") authHeader: String,
+        @Query("cursor") cursor: String = "",
+        @Query("limit") limit: Int = 15
+    ): Response<VideoFeedPageDto>
+
+    @GET("/v1/videos/{id}/refresh-stream-url")
+    suspend fun refreshStreamUrl(
+        @Header("Authorization") authHeader: String,
+        @Path("id") videoId: String
+    ): Response<RefreshedStreamDto>
+
+    @POST("/v1/videos/{id}/view")
+    suspend fun recordVideoView(
+        @Header("Authorization") authHeader: String,
+        @Path("id") videoId: String,
+        @Body request: WatchProgressRequest
+    ): Response<Unit>
+
+    @POST("/v1/videos/{id}/watch-progress")
+    suspend fun recordWatchProgress(
+        @Header("Authorization") authHeader: String,
+        @Path("id") videoId: String,
+        @Body request: WatchProgressRequest
+    ): Response<Unit>
+
+    @POST("/v1/videos/{id}/like")
+    suspend fun likeVideo(
+        @Header("Authorization") authHeader: String,
+        @Path("id") videoId: String
+    ): Response<VideoLikeResponse>
+
+    @retrofit2.http.DELETE("/v1/videos/{id}/like")
+    suspend fun unlikeVideo(
+        @Header("Authorization") authHeader: String,
+        @Path("id") videoId: String
+    ): Response<VideoLikeResponse>
+
+    @POST("/v1/videos/{id}/save")
+    suspend fun saveVideo(
+        @Header("Authorization") authHeader: String,
+        @Path("id") videoId: String
+    ): Response<VideoSaveResponse>
+
+    @retrofit2.http.DELETE("/v1/videos/{id}/save")
+    suspend fun unsaveVideo(
+        @Header("Authorization") authHeader: String,
+        @Path("id") videoId: String
+    ): Response<VideoSaveResponse>
+
+    @POST("/v1/videos/{id}/share")
+    suspend fun shareVideo(
+        @Header("Authorization") authHeader: String,
+        @Path("id") videoId: String,
+        @Body request: VideoShareRequest
+    ): Response<VideoShareResponse>
+
+    @POST("/v1/videos/{id}/repost")
+    suspend fun repostVideo(
+        @Header("Authorization") authHeader: String,
+        @Path("id") videoId: String
+    ): Response<VideoRepostResponse>
+
+    @retrofit2.http.DELETE("/v1/videos/{id}/repost")
+    suspend fun unrepostVideo(
+        @Header("Authorization") authHeader: String,
+        @Path("id") videoId: String
+    ): Response<VideoRepostResponse>
+
+    @POST("/v1/videos/{id}/not-interested")
+    suspend fun markNotInterested(
+        @Header("Authorization") authHeader: String,
+        @Path("id") videoId: String
+    ): Response<Unit>
+
+    @POST("/v1/videos/{id}/report")
+    suspend fun reportVideo(
+        @Header("Authorization") authHeader: String,
+        @Path("id") videoId: String,
+        @Body request: VideoReportRequest
+    ): Response<Unit>
+
+    @retrofit2.http.PATCH("/v1/videos/{id}")
+    suspend fun updateOwnerVideo(
+        @Header("Authorization") authHeader: String,
+        @Path("id") videoId: String,
+        @Body request: UpdateOwnerVideoRequest
+    ): Response<FeedVideoDto>
+
+    @retrofit2.http.DELETE("/v1/videos/{id}")
+    suspend fun deleteOwnerVideo(
+        @Header("Authorization") authHeader: String,
+        @Path("id") videoId: String
+    ): Response<Unit>
+
+    @POST("/v1/users/{id}/block")
+    suspend fun blockUser(
+        @Header("Authorization") authHeader: String,
+        @Path("id") userId: String
+    ): Response<Unit>
+
+    @retrofit2.http.DELETE("/v1/users/{id}/block")
+    suspend fun unblockUser(
+        @Header("Authorization") authHeader: String,
+        @Path("id") userId: String
+    ): Response<Unit>
+
+    @POST("/v1/users/{id}/mute")
+    suspend fun muteUser(
+        @Header("Authorization") authHeader: String,
+        @Path("id") userId: String
+    ): Response<Unit>
+
+    @retrofit2.http.DELETE("/v1/users/{id}/mute")
+    suspend fun unmuteUser(
+        @Header("Authorization") authHeader: String,
+        @Path("id") userId: String
+    ): Response<Unit>
+
+    @GET("/v1/me/saved-videos")
+    suspend fun listSavedVideos(
+        @Header("Authorization") authHeader: String,
+        @Query("cursor") cursor: String = "",
+        @Query("limit") limit: Int = 21
+    ): Response<VideoFeedPageDto>
+
+    @GET("/v1/me/safety")
+    suspend fun listSafetyPreferences(
+        @Header("Authorization") authHeader: String
+    ): Response<SafetyPreferencesDto>
+
+    @GET("/v1/hashtags/{tag}/videos")
+    suspend fun getHashtagDiscovery(
+        @Header("Authorization") authHeader: String,
+        @Path("tag") tag: String,
+        @Query("cursor") cursor: String = "",
+        @Query("limit") limit: Int = 21
+    ): Response<HashtagDiscoveryDto>
+
+    @GET("/v1/audios/{id}/videos")
+    suspend fun getAudioDiscovery(
+        @Header("Authorization") authHeader: String,
+        @Path("id") audioId: String,
+        @Query("cursor") cursor: String = "",
+        @Query("limit") limit: Int = 21
+    ): Response<AudioDiscoveryDto>
+
+    @GET("/v1/search")
+    suspend fun searchAll(
+        @Header("Authorization") authHeader: String,
+        @Query("q") query: String,
+        @Query("cursor") cursor: String = "",
+        @Query("limit") limit: Int = 20
+    ): Response<FeedSearchResponseDto>
+
+    @retrofit2.http.DELETE("/v1/search/history")
+    suspend fun clearSearchHistory(
+        @Header("Authorization") authHeader: String
+    ): Response<Unit>
+
+    @retrofit2.http.DELETE("/v1/search/history/{id}")
+    suspend fun deleteSearchHistoryItem(
+        @Header("Authorization") authHeader: String,
+        @Path("id") id: String
+    ): Response<Unit>
 }
 
 class CountingBytesRequestBody(
@@ -439,11 +891,34 @@ object TelefamNetworkClient {
             .trim()
             .ifBlank { "https://api.telefam.app" }
             .let { if (it.endsWith("/")) it else "$it/" }
-        return if (rawUrl.startsWith("https://") || rawUrl.startsWith("http://")) {
-            rawUrl
-        } else {
-            "https://api.telefam.app/"
+        val uri = runCatching { java.net.URI(rawUrl) }.getOrNull()
+        val host = uri?.host?.lowercase().orEmpty()
+        val isLocalLoopback = host == "localhost" || host == "127.0.0.1" || host == "10.0.2.2"
+        return when {
+            rawUrl.startsWith("https://") && host.isNotBlank() -> rawUrl
+            rawUrl.startsWith("http://") && isLocalLoopback -> rawUrl
+            else -> "https://api.telefam.app/"
         }
+    }
+
+    fun baseUrl(): String = resolvedBaseUrl()
+
+    fun resolveMediaUrl(rawPathOrUrl: String): String {
+        val trimmed = rawPathOrUrl.trim()
+        if (trimmed.isEmpty()) return ""
+        if (trimmed.startsWith("https://") || trimmed.startsWith("http://")) return trimmed
+        val base = resolvedBaseUrl().trimEnd('/')
+        val path = if (trimmed.startsWith("/")) trimmed else "/$trimmed"
+        return base + path
+    }
+
+    val mediaOkHttpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+            .build()
     }
 
     fun createService(uploadTimeoutSeconds: Long = 15L): TelefamApiService {

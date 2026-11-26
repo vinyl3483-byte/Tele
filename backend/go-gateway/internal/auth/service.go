@@ -3,6 +3,9 @@ package auth
 import (
 	"context"
 	"crypto/rand"
+	"crypto/rsa"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -10,7 +13,10 @@ import (
 	"math/big"
 	"net/http"
 	"net/smtp"
+	"net/url"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -24,13 +30,21 @@ import (
 )
 
 type Service struct {
-	cfg     *config.Config
-	pool    *pgxpool.Pool
-	limiter *ratelimit.Limiter
+	cfg       *config.Config
+	pool      *pgxpool.Pool
+	limiter   *ratelimit.Limiter
+	jwksMu    sync.RWMutex
+	appleKeys map[string]*rsa.PublicKey
+	appleExp  time.Time
 }
 
 func NewService(cfg *config.Config, pool *pgxpool.Pool, limiter *ratelimit.Limiter) *Service {
-	return &Service{cfg: cfg, pool: pool, limiter: limiter}
+	return &Service{
+		cfg:       cfg,
+		pool:      pool,
+		limiter:   limiter,
+		appleKeys: make(map[string]*rsa.PublicKey),
+	}
 }
 
 type SendOTPResult struct {
@@ -161,12 +175,16 @@ func (s *Service) VerifyOTPOrMagicLink(ctx context.Context, rawEmail, otp, magic
 	}
 
 	email, err := normalizeEmail(rawEmail)
-	if err != nil && magicToken == "" {
+	if err != nil && strings.TrimSpace(magicToken) == "" {
 		return nil, http.StatusBadRequest, errors.New("invalid input")
 	}
-	emailHash := security.HMACSHA256Hex(s.cfg.HMACPepper, email)
+	var emailHash string
+	if err == nil {
+		emailHash = security.HMACSHA256Hex(s.cfg.HMACPepper, email)
+	}
 
 	var verifiedEmailHash string
+	var resolvedEmail = email
 	err = db.WithAuthWorkerRLS(ctx, s.pool, func(tx pgx.Tx) error {
 		var challengeID uuid.UUID
 		var cEmailHash, otpHMAC, magicHMAC string
@@ -174,8 +192,8 @@ func (s *Service) VerifyOTPOrMagicLink(ctx context.Context, rawEmail, otp, magic
 		var expiresAt time.Time
 
 		var qErr error
-		if magicToken != "" {
-			magicCandidate := security.HMACSHA256Hex(s.cfg.HMACPepper, magicToken)
+		if strings.TrimSpace(magicToken) != "" {
+			magicCandidate := security.HMACSHA256Hex(s.cfg.HMACPepper, strings.TrimSpace(magicToken))
 			qErr = tx.QueryRow(ctx, `
 				SELECT id, email_hash, otp_hmac, magic_token_hmac, attempt_count, expires_at
 				FROM otp_challenges
@@ -197,10 +215,19 @@ func (s *Service) VerifyOTPOrMagicLink(ctx context.Context, rawEmail, otp, magic
 			return errors.New("challenge expired")
 		}
 
-		if magicToken != "" {
-			magicCandidate := security.HMACSHA256Hex(s.cfg.HMACPepper, magicToken)
+		if strings.TrimSpace(magicToken) != "" {
+			magicCandidate := security.HMACSHA256Hex(s.cfg.HMACPepper, strings.TrimSpace(magicToken))
 			if !security.ConstantTimeHexEqual(magicCandidate, magicHMAC) {
+				_, _ = tx.Exec(ctx, `UPDATE otp_challenges SET attempt_count = attempt_count + 1 WHERE id = $1`, challengeID)
 				return errors.New("invalid magic token")
+			}
+			if resolvedEmail == "" {
+				var encEmail []byte
+				if eErr := tx.QueryRow(ctx, `SELECT email_encrypted FROM users WHERE email_hash = $1`, cEmailHash).Scan(&encEmail); eErr == nil {
+					if dec, dErr := security.DecryptAtRest(s.cfg.MasterKey, encEmail, "users.email"); dErr == nil {
+						resolvedEmail = string(dec)
+					}
+				}
 			}
 		} else {
 			otpCandidate := security.HMACSHA256Hex(s.cfg.HMACPepper, cEmailHash+"|"+strings.TrimSpace(otp))
@@ -208,6 +235,10 @@ func (s *Service) VerifyOTPOrMagicLink(ctx context.Context, rawEmail, otp, magic
 				_, _ = tx.Exec(ctx, `UPDATE otp_challenges SET attempt_count = attempt_count + 1 WHERE id = $1`, challengeID)
 				return errors.New("invalid otp")
 			}
+		}
+
+		if resolvedEmail == "" {
+			return errors.New("email verification required")
 		}
 
 		_, updErr := tx.Exec(ctx, `UPDATE otp_challenges SET consumed_at = NOW() WHERE id = $1`, challengeID)
@@ -218,7 +249,7 @@ func (s *Service) VerifyOTPOrMagicLink(ctx context.Context, rawEmail, otp, magic
 		return nil, http.StatusUnauthorized, err
 	}
 
-	return s.issueSessionForUser(ctx, verifiedEmailHash, email, "email_otp", "", "", devHash, ipFP, hwAttest, deviceName, platform)
+	return s.issueSessionForUser(ctx, verifiedEmailHash, resolvedEmail, "email_otp", "", "", devHash, ipFP, hwAttest, deviceName, platform)
 }
 
 func (s *Service) VerifyOAuth(ctx context.Context, provider, idToken, deviceFP, ipFP, hwAttest, deviceName, platform string) (*AuthSessionResult, int, error) {
@@ -229,11 +260,18 @@ func (s *Service) VerifyOAuth(ctx context.Context, provider, idToken, deviceFP, 
 
 	var email, sub string
 	var err error
-	switch provider {
+	var googleSubHash, appleSubHash string
+	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "google":
 		email, sub, err = s.verifyGoogleToken(ctx, idToken)
+		if err == nil {
+			googleSubHash = security.HMACSHA256Hex(s.cfg.HMACPepper, "google:"+sub)
+		}
 	case "apple":
 		email, sub, err = s.verifyAppleToken(ctx, idToken)
+		if err == nil {
+			appleSubHash = security.HMACSHA256Hex(s.cfg.HMACPepper, "apple:"+sub)
+		}
 	default:
 		return nil, http.StatusBadRequest, errors.New("unsupported provider")
 	}
@@ -242,8 +280,7 @@ func (s *Service) VerifyOAuth(ctx context.Context, provider, idToken, deviceFP, 
 	}
 
 	emailHash := security.HMACSHA256Hex(s.cfg.HMACPepper, email)
-	subHash := security.HMACSHA256Hex(s.cfg.HMACPepper, provider+":"+sub)
-	return s.issueSessionForUser(ctx, emailHash, email, provider, subHash, subHash, devHash, ipFP, hwAttest, deviceName, platform)
+	return s.issueSessionForUser(ctx, emailHash, email, provider, googleSubHash, appleSubHash, devHash, ipFP, hwAttest, deviceName, platform)
 }
 
 func (s *Service) issueSessionForUser(
@@ -253,15 +290,14 @@ func (s *Service) issueSessionForUser(
 	var userID uuid.UUID
 	var displayName string
 	var profileCompleted bool
+	var suspended bool
+	sessionID := uuid.New()
 	refreshToken, err := generateRandomTokenHex(32)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	refreshHMAC := security.HMACSHA256Hex(s.cfg.HMACPepper, refreshToken)
 
-	if plainEmail == "" {
-		plainEmail = "verified@telefam.app"
-	}
 	defaultName := strings.Split(plainEmail, "@")[0]
 	encEmail, err := security.EncryptAtRest(s.cfg.MasterKey, []byte(plainEmail), "users.email")
 	if err != nil {
@@ -278,7 +314,10 @@ func (s *Service) issueSessionForUser(
 
 	err = db.WithAuthWorkerRLS(ctx, s.pool, func(tx pgx.Tx) error {
 		var existingEncName []byte
-		qErr := tx.QueryRow(ctx, `SELECT id, display_name_encrypted, profile_completed FROM users WHERE email_hash = $1`, emailHash).Scan(&userID, &existingEncName, &profileCompleted)
+		qErr := tx.QueryRow(ctx, `
+			SELECT id, display_name_encrypted, profile_completed, is_suspended
+			FROM users WHERE email_hash = $1
+		`, emailHash).Scan(&userID, &existingEncName, &profileCompleted, &suspended)
 		if qErr == pgx.ErrNoRows {
 			qErr = tx.QueryRow(ctx, `
 				INSERT INTO users (email_hash, email_encrypted, display_name_encrypted, auth_provider, google_sub_hash, apple_sub_hash, profile_completed)
@@ -288,6 +327,9 @@ func (s *Service) issueSessionForUser(
 			displayName = defaultName
 			profileCompleted = false
 		} else if qErr == nil {
+			if suspended {
+				return errors.New("account suspended")
+			}
 			if pt, dErr := security.DecryptAtRest(s.cfg.MasterKey, existingEncName, "users.display_name"); dErr == nil {
 				displayName = string(pt)
 			} else {
@@ -315,17 +357,21 @@ func (s *Service) issueSessionForUser(
 		}
 
 		_, err = tx.Exec(ctx, `
-			INSERT INTO sessions (user_id, device_id, refresh_token_hmac, ip_fp_hash, expires_at)
-			VALUES ($1,$2,$3,$4,$5)
-		`, userID, deviceID, refreshHMAC, ipFP, time.Now().UTC().Add(30*24*time.Hour))
+			INSERT INTO sessions (id, user_id, device_id, refresh_token_hmac, ip_fp_hash, expires_at)
+			VALUES ($1,$2,$3,$4,$5,$6)
+		`, sessionID, userID, deviceID, refreshHMAC, ipFP, time.Now().UTC().Add(30*24*time.Hour))
 		return err
 	})
 	if err != nil {
+		if err.Error() == "account suspended" {
+			return nil, http.StatusForbidden, err
+		}
 		return nil, http.StatusInternalServerError, err
 	}
 
 	expiresIn := int64(900) // 15 minutes short-lived access JWT
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"jti": sessionID.String(),
 		"sub": userID.String(),
 		"dev": devHash,
 		"ipf": ipFP,
@@ -348,31 +394,167 @@ func (s *Service) issueSessionForUser(
 	}, http.StatusOK, nil
 }
 
-func (s *Service) ParseAccessToken(tokenString string) (uuid.UUID, string, error) {
+func (s *Service) ParseAndValidateAccessToken(ctx context.Context, tokenString string) (uuid.UUID, uuid.UUID, string, error) {
 	parsed, err := jwt.Parse(tokenString, func(t *jwt.Token) (any, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+		if t.Method.Alg() != jwt.SigningMethodHS256.Alg() {
 			return nil, errors.New("unexpected signing method")
 		}
 		return s.cfg.JWTSecret, nil
-	})
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithExpirationRequired())
 	if err != nil || !parsed.Valid {
-		return uuid.Nil, "", errors.New("invalid token")
+		return uuid.Nil, uuid.Nil, "", errors.New("invalid token")
 	}
 	claims, ok := parsed.Claims.(jwt.MapClaims)
 	if !ok {
-		return uuid.Nil, "", errors.New("invalid claims")
+		return uuid.Nil, uuid.Nil, "", errors.New("invalid claims")
 	}
 	subStr, _ := claims["sub"].(string)
+	jtiStr, _ := claims["jti"].(string)
 	devFP, _ := claims["dev"].(string)
 	uid, err := uuid.Parse(subStr)
 	if err != nil {
-		return uuid.Nil, "", errors.New("invalid subject")
+		return uuid.Nil, uuid.Nil, "", errors.New("invalid subject")
 	}
-	return uid, devFP, nil
+	sid, err := uuid.Parse(jtiStr)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, "", errors.New("invalid session id")
+	}
+
+	var active bool
+	err = db.WithAuthWorkerRLS(ctx, s.pool, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			SELECT EXISTS(
+				SELECT 1
+				FROM sessions s
+				JOIN devices d ON d.id = s.device_id
+				JOIN users u ON u.id = s.user_id
+				WHERE s.id = $1
+				  AND s.user_id = $2
+				  AND s.revoked_at IS NULL
+				  AND s.expires_at > NOW()
+				  AND d.revoked_at IS NULL
+				  AND u.is_suspended = FALSE
+			)
+		`, sid, uid).Scan(&active)
+	})
+	if err != nil || !active {
+		return uuid.Nil, uuid.Nil, "", errors.New("session revoked or suspended")
+	}
+	return uid, sid, devFP, nil
+}
+
+func (s *Service) RefreshSession(ctx context.Context, refreshToken, deviceFP, hwAttest, platform, ipFP string) (*AuthSessionResult, int, error) {
+	rt := strings.TrimSpace(refreshToken)
+	if len(rt) < 32 {
+		return nil, http.StatusUnauthorized, errors.New("invalid refresh token")
+	}
+	rtHMAC := security.HMACSHA256Hex(s.cfg.HMACPepper, rt)
+	devHash := security.CanonicalizeDeviceFingerprint(s.cfg.HMACPepper, deviceFP, hwAttest, platform)
+
+	newRefresh, err := generateRandomTokenHex(32)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	newRefreshHMAC := security.HMACSHA256Hex(s.cfg.HMACPepper, newRefresh)
+	newSessionID := uuid.New()
+
+	var userID uuid.UUID
+	var plainEmail, displayName string
+	var profileCompleted bool
+
+	err = db.WithAuthWorkerRLS(ctx, s.pool, func(tx pgx.Tx) error {
+		var oldSessID, devID uuid.UUID
+		var encEmail, encName []byte
+		var suspended bool
+		var storedDevFP string
+		err := tx.QueryRow(ctx, `
+			SELECT s.id, s.user_id, s.device_id, d.device_fp_hash, u.email_encrypted, u.display_name_encrypted, u.profile_completed, u.is_suspended
+			FROM sessions s
+			JOIN devices d ON d.id = s.device_id
+			JOIN users u ON u.id = s.user_id
+			WHERE s.refresh_token_hmac = $1
+			  AND s.revoked_at IS NULL
+			  AND s.expires_at > NOW()
+			  AND d.revoked_at IS NULL
+			FOR UPDATE
+		`, rtHMAC).Scan(&oldSessID, &userID, &devID, &storedDevFP, &encEmail, &encName, &profileCompleted, &suspended)
+		if err != nil {
+			return errors.New("refresh token invalid")
+		}
+		if suspended {
+			return errors.New("account suspended")
+		}
+		if devHash != "" && storedDevFP != "" && !security.ConstantTimeHexEqual(devHash, storedDevFP) {
+			return errors.New("device binding mismatch")
+		}
+
+		tag, err := tx.Exec(ctx, `UPDATE sessions SET revoked_at = NOW() WHERE id = $1 AND revoked_at IS NULL`, oldSessID)
+		if err != nil || tag.RowsAffected() != 1 {
+			return errors.New("refresh race detected")
+		}
+
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO sessions (id, user_id, device_id, refresh_token_hmac, ip_fp_hash, expires_at)
+			VALUES ($1,$2,$3,$4,$5,$6)
+		`, newSessionID, userID, devID, newRefreshHMAC, ipFP, time.Now().UTC().Add(30*24*time.Hour)); err != nil {
+			return err
+		}
+
+		if pt, dErr := security.DecryptAtRest(s.cfg.MasterKey, encEmail, "users.email"); dErr == nil {
+			plainEmail = string(pt)
+		}
+		if pt, dErr := security.DecryptAtRest(s.cfg.MasterKey, encName, "users.display_name"); dErr == nil {
+			displayName = string(pt)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, http.StatusUnauthorized, err
+	}
+
+	expiresIn := int64(900)
+	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"jti": newSessionID.String(),
+		"sub": userID.String(),
+		"dev": devHash,
+		"ipf": ipFP,
+		"iat": time.Now().UTC().Unix(),
+		"exp": time.Now().UTC().Add(time.Duration(expiresIn) * time.Second).Unix(),
+	})
+	accessToken, err := tok.SignedString(s.cfg.JWTSecret)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+
+	return &AuthSessionResult{
+		AccessToken:      accessToken,
+		RefreshToken:     newRefresh,
+		ExpiresIn:        expiresIn,
+		UserID:           userID.String(),
+		Email:            plainEmail,
+		DisplayName:      displayName,
+		ProfileCompleted: profileCompleted,
+	}, http.StatusOK, nil
+}
+
+func (s *Service) LogoutSession(ctx context.Context, userID, sessionID uuid.UUID) (int, error) {
+	err := db.WithAuthWorkerRLS(ctx, s.pool, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE sessions SET revoked_at = NOW() WHERE id = $1 AND user_id = $2`, sessionID, userID)
+		return err
+	})
+	if err != nil {
+		return http.StatusInternalServerError, err
+	}
+	return http.StatusOK, nil
 }
 
 func (s *Service) verifyGoogleToken(ctx context.Context, idToken string) (string, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://oauth2.googleapis.com/tokeninfo?id_token="+idToken, nil)
+	u, _ := url.Parse("https://oauth2.googleapis.com/tokeninfo")
+	q := u.Query()
+	q.Set("id_token", strings.TrimSpace(idToken))
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return "", "", err
 	}
@@ -388,12 +570,17 @@ func (s *Service) verifyGoogleToken(ctx context.Context, idToken string) (string
 		Sub           string `json:"sub"`
 		Email         string `json:"email"`
 		EmailVerified string `json:"email_verified"`
+		Exp           string `json:"exp"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
 		return "", "", err
 	}
 	if s.cfg.GoogleClientID != "" && info.Aud != s.cfg.GoogleClientID {
 		return "", "", errors.New("audience mismatch")
+	}
+	expUnix, err := strconv.ParseInt(info.Exp, 10, 64)
+	if err != nil || time.Now().UTC().Unix() >= expUnix {
+		return "", "", errors.New("google token expired")
 	}
 	if info.EmailVerified != "true" || info.Sub == "" {
 		return "", "", errors.New("unverified email")
@@ -402,24 +589,94 @@ func (s *Service) verifyGoogleToken(ctx context.Context, idToken string) (string
 	return norm, info.Sub, err
 }
 
-func (s *Service) verifyAppleToken(_ context.Context, identityToken string) (string, string, error) {
-	// Parse JWT header & verify claims structure against Apple ISS and audience;
-	// in production deployments fetch Apple's https://appleid.apple.com/auth/keys JWKS.
-	parser := jwt.NewParser()
-	token, _, err := parser.ParseUnverified(identityToken, jwt.MapClaims{})
+func (s *Service) fetchApplePublicKey(ctx context.Context, kid string) (*rsa.PublicKey, error) {
+	now := time.Now().UTC()
+	s.jwksMu.RLock()
+	if now.Before(s.appleExp) {
+		if k, ok := s.appleKeys[kid]; ok {
+			s.jwksMu.RUnlock()
+			return k, nil
+		}
+	}
+	s.jwksMu.RUnlock()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://appleid.apple.com/auth/keys", nil)
 	if err != nil {
-		return "", "", err
+		return nil, err
+	}
+	resp, err := (&http.Client{Timeout: 8 * time.Second}).Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return nil, errors.New("apple jwks fetch failed")
+	}
+	defer resp.Body.Close()
+
+	var jwks struct {
+		Keys []struct {
+			Kty string `json:"kty"`
+			Kid string `json:"kid"`
+			Alg string `json:"alg"`
+			N   string `json:"n"`
+			E   string `json:"e"`
+		} `json:"keys"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&jwks); err != nil {
+		return nil, err
+	}
+
+	next := make(map[string]*rsa.PublicKey, len(jwks.Keys))
+	for _, k := range jwks.Keys {
+		if k.Kty != "RSA" || k.Kid == "" {
+			continue
+		}
+		nBytes, err1 := base64.RawURLEncoding.DecodeString(k.N)
+		eBytes, err2 := base64.RawURLEncoding.DecodeString(k.E)
+		if err1 != nil || err2 != nil || len(nBytes) == 0 || len(eBytes) == 0 {
+			continue
+		}
+		var eBuf [8]byte
+		copy(eBuf[8-len(eBytes):], eBytes)
+		eVal := int(binary.BigEndian.Uint64(eBuf[:]))
+		next[k.Kid] = &rsa.PublicKey{
+			N: new(big.Int).SetBytes(nBytes),
+			E: eVal,
+		}
+	}
+
+	s.jwksMu.Lock()
+	s.appleKeys = next
+	s.appleExp = now.Add(15 * time.Minute)
+	s.jwksMu.Unlock()
+
+	pub, ok := next[kid]
+	if !ok {
+		return nil, errors.New("apple key not found")
+	}
+	return pub, nil
+}
+
+func (s *Service) verifyAppleToken(ctx context.Context, identityToken string) (string, string, error) {
+	token, err := jwt.Parse(identityToken, func(t *jwt.Token) (any, error) {
+		if t.Method.Alg() != jwt.SigningMethodRS256.Alg() {
+			return nil, errors.New("unexpected apple signing algorithm")
+		}
+		kid, _ := t.Header["kid"].(string)
+		if kid == "" {
+			return nil, errors.New("missing apple kid header")
+		}
+		return s.fetchApplePublicKey(ctx, kid)
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodRS256.Alg()}), jwt.WithIssuer("https://appleid.apple.com"), jwt.WithExpirationRequired())
+	if err != nil || !token.Valid {
+		return "", "", errors.New("invalid apple token signature")
 	}
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
 		return "", "", errors.New("invalid apple claims")
 	}
-	iss, _ := claims["iss"].(string)
 	aud, _ := claims["aud"].(string)
 	sub, _ := claims["sub"].(string)
 	email, _ := claims["email"].(string)
-	if iss != "https://appleid.apple.com" || sub == "" {
-		return "", "", errors.New("invalid apple issuer")
+	if sub == "" {
+		return "", "", errors.New("missing apple subject")
 	}
 	if s.cfg.AppleBundleID != "" && aud != s.cfg.AppleBundleID {
 		return "", "", errors.New("invalid apple audience")
@@ -433,10 +690,9 @@ func (s *Service) verifyAppleToken(_ context.Context, identityToken string) (str
 
 func (s *Service) dispatchOTPEmail(recipient, otpCode, magicToken string) error {
 	if s.cfg.SMTPHost == "" {
-		// SMTP not configured in local dev environment
 		return nil
 	}
-	verifyURL := fmt.Sprintf("%s?token=%s&email=%s", s.cfg.MagicLinkBaseURL, magicToken, recipient)
+	verifyURL := fmt.Sprintf("%s?token=%s&email=%s", s.cfg.MagicLinkBaseURL, url.QueryEscape(magicToken), url.QueryEscape(recipient))
 	body := fmt.Sprintf(
 		"Subject: Telefam Verification Code\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n"+
 			"Your Telefam verification code is: %s\r\n\r\nOr verify using this link:\r\n%s\r\n",

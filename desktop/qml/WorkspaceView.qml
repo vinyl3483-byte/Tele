@@ -13,24 +13,11 @@ Item {
     readonly property color inkCol: telefam.isDarkTheme ? "#FFFFFF" : "#111827"
     readonly property color subCol: telefam.isDarkTheme ? "#9CA3AF" : "#6B7280"
 
-    property string toastText: ""
-
-    function showComingSoon() {
-        toastText = "Coming soon"
-        toastTimer.restart()
-    }
-
-    Timer {
-        id: toastTimer
-        interval: 1700
-        onTriggered: toastText = ""
-    }
-
     focus: true
     Keys.onEscapePressed: {
         if (telefam.selectedConversationId.length > 0) {
             telefam.selectConversation("")
-        } else if (telefam.activeTab === 1) {
+        } else if (telefam.activeTab !== 0) {
             telefam.selectTab(0)
         }
     }
@@ -44,7 +31,7 @@ Item {
         anchors.fill: parent
         spacing: 0
 
-        // Top Red Bar: Chats bar OR Contacts bar with Search + Filters
+        // Top Red Bar: Home search (Chats/Feeds/Profile) OR Contacts bar with Search + Filters
         ColumnLayout {
             Layout.fillWidth: true
             spacing: 0
@@ -56,9 +43,9 @@ Item {
                 Layout.rightMargin: 18
                 spacing: 12
 
-                // Chats search bar placeholder (Coming soon)
+                // Live Search Input for Chats / Feeds / Profile
                 Rectangle {
-                    visible: telefam.activeTab === 0
+                    visible: telefam.activeTab !== 1
                     Layout.fillWidth: true
                     Layout.maximumWidth: 480
                     Layout.preferredHeight: 46
@@ -73,17 +60,16 @@ Item {
                         anchors.rightMargin: 14
                         spacing: 8
                         Image { source: "qrc:/telefam/icons/ic_search.svg"; sourceSize.width: 18; sourceSize.height: 18 }
-                        Text {
-                            text: "Search chats, people, groups..."
-                            color: "#D1D5DB"
-                            font.pixelSize: 13
+                        TextField {
                             Layout.fillWidth: true
+                            text: telefam.homeSearchQuery
+                            placeholderText: "Search chats, people, groups"
+                            placeholderTextColor: "#B3FFFFFF"
+                            color: "#FFFFFF"
+                            font.pixelSize: 13
+                            background: Item {}
+                            onTextEdited: telefam.setHomeSearchQuery(text)
                         }
-                    }
-                    MouseArea {
-                        anchors.fill: parent
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: showComingSoon()
                     }
                 }
 
@@ -119,7 +105,7 @@ Item {
 
                 Item { Layout.fillWidth: true }
 
-                // Theme Switcher Pill (Working Now)
+                // Theme Switcher Pill
                 Button {
                     Layout.preferredHeight: 38
                     Layout.preferredWidth: 96
@@ -150,21 +136,39 @@ Item {
                 }
 
                 Button {
-                    visible: telefam.activeTab === 0
+                    visible: telefam.activeTab !== 1
                     Layout.preferredWidth: 48
                     Layout.preferredHeight: 48
                     flat: true
-                    contentItem: Image {
-                        source: "qrc:/telefam/icons/ic_bell.svg"
-                        sourceSize.width: 22
-                        sourceSize.height: 22
-                        fillMode: Image.PreserveAspectFit
+                    contentItem: Item {
+                        Image {
+                            anchors.centerIn: parent
+                            source: "qrc:/telefam/icons/ic_bell.svg"
+                            sourceSize.width: 22
+                            sourceSize.height: 22
+                            fillMode: Image.PreserveAspectFit
+                        }
+                        Rectangle {
+                            visible: telefam.unreadNotificationCount > 0
+                            width: 8
+                            height: 8
+                            radius: 4
+                            color: "#FFFFFF"
+                            anchors.top: parent.top
+                            anchors.right: parent.right
+                            anchors.topMargin: 8
+                            anchors.rightMargin: 8
+                        }
                     }
-                    onClicked: showComingSoon()
+                    onClicked: {
+                        telefam.refreshNotifications()
+                        notificationsDialog.open()
+                    }
                 }
 
                 Button {
-                    visible: telefam.activeTab === 0
+                    id: moreMenuBtn
+                    visible: telefam.activeTab !== 1
                     Layout.preferredWidth: 48
                     Layout.preferredHeight: 48
                     flat: true
@@ -174,11 +178,29 @@ Item {
                         sourceSize.height: 22
                         fillMode: Image.PreserveAspectFit
                     }
-                    onClicked: showComingSoon()
+                    onClicked: moreMenu.open()
+
+                    Menu {
+                        id: moreMenu
+                        y: moreMenuBtn.height
+                        MenuItem {
+                            text: "Sync"
+                            onTriggered: telefam.syncNow()
+                        }
+                        MenuItem {
+                            text: "Edit profile"
+                            onTriggered: telefam.openEditProfile()
+                        }
+                        MenuSeparator {}
+                        MenuItem {
+                            text: "Sign out"
+                            onTriggered: telefam.signOut()
+                        }
+                    }
                 }
             }
 
-            // Contacts Filter Tabs Row matching reference screenshot
+            // Contacts Filter Tabs Row
             RowLayout {
                 visible: telefam.activeTab === 1
                 Layout.fillWidth: true
@@ -233,7 +255,7 @@ Item {
                 anchors.fill: parent
                 spacing: 0
 
-                // Left Navigation Rail with cleanly positioned buttons
+                // Left Navigation Rail
                 Rectangle {
                     Layout.preferredWidth: 84
                     Layout.fillHeight: true
@@ -318,9 +340,15 @@ Item {
                             contentItem: Column {
                                 spacing: 4
                                 Image { source: "qrc:/telefam/icons/ic_feeds.svg"; sourceSize.width: 20; sourceSize.height: 20; anchors.horizontalCenter: parent.horizontalCenter }
-                                Text { text: "Feeds"; color: subCol; font.pixelSize: 11; anchors.horizontalCenter: parent.horizontalCenter }
+                                Text {
+                                    text: "Feeds"
+                                    color: telefam.activeTab === 2 ? brandRed : subCol
+                                    font.bold: telefam.activeTab === 2
+                                    font.pixelSize: 11
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                }
                             }
-                            onClicked: showComingSoon()
+                            onClicked: telefam.selectTab(2)
                         }
 
                         Button {
@@ -331,9 +359,15 @@ Item {
                             contentItem: Column {
                                 spacing: 4
                                 Image { source: "qrc:/telefam/icons/ic_profile.svg"; sourceSize.width: 20; sourceSize.height: 20; anchors.horizontalCenter: parent.horizontalCenter }
-                                Text { text: "Profile"; color: subCol; font.pixelSize: 11; anchors.horizontalCenter: parent.horizontalCenter }
+                                Text {
+                                    text: "Profile"
+                                    color: telefam.activeTab === 3 ? brandRed : subCol
+                                    font.bold: telefam.activeTab === 3
+                                    font.pixelSize: 11
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                }
                             }
-                            onClicked: showComingSoon()
+                            onClicked: telefam.selectTab(3)
                         }
 
                         Item { Layout.fillHeight: true }
@@ -346,7 +380,7 @@ Item {
                     color: borderCol
                 }
 
-                // Contacts Grid OR Empty State OR Split-Pane Chats
+                // Main Content Area
                 Item {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
@@ -356,9 +390,9 @@ Item {
                         anchors.fill: parent
                     }
 
-                    // Empty Home matching Image 2
+                    // Empty Chats
                     ColumnLayout {
-                        visible: telefam.activeTab === 0 && telefam.conversations.length === 0
+                        visible: telefam.activeTab === 0 && telefam.filteredConversations.length === 0
                         anchors.centerIn: parent
                         spacing: 14
 
@@ -411,7 +445,7 @@ Item {
 
                     // Active Conversations Split-Pane
                     SplitView {
-                        visible: telefam.activeTab === 0 && telefam.conversations.length > 0
+                        visible: telefam.activeTab === 0 && telefam.filteredConversations.length > 0
                         anchors.fill: parent
                         orientation: Qt.Horizontal
 
@@ -443,7 +477,7 @@ Item {
                                 ListView {
                                     Layout.fillWidth: true
                                     Layout.fillHeight: true
-                                    model: telefam.conversations
+                                    model: telefam.filteredConversations
                                     spacing: 6
                                     delegate: ItemDelegate {
                                         width: ListView.view.width
@@ -528,14 +562,295 @@ Item {
                             }
                         }
                     }
+
+                    // Feeds Tab (activeTab === 2)
+                    Item {
+                        visible: telefam.activeTab === 2
+                        anchors.fill: parent
+
+                        ColumnLayout {
+                            visible: telefam.feedPosts.length === 0
+                            anchors.centerIn: parent
+                            spacing: 14
+
+                            Rectangle {
+                                width: 72
+                                height: 72
+                                radius: 36
+                                color: telefam.isDarkTheme ? "#2C1618" : "#FCE8E8"
+                                Layout.alignment: Qt.AlignHCenter
+                                Image {
+                                    anchors.centerIn: parent
+                                    source: "qrc:/telefam/icons/ic_feeds.svg"
+                                    sourceSize.width: 30
+                                    sourceSize.height: 30
+                                }
+                            }
+                            Text {
+                                text: "No posts yet"
+                                font.pixelSize: 20
+                                font.bold: true
+                                color: inkCol
+                                Layout.alignment: Qt.AlignHCenter
+                            }
+                            Button {
+                                text: "Create post"
+                                Layout.alignment: Qt.AlignHCenter
+                                Layout.preferredWidth: 160
+                                Layout.preferredHeight: 46
+                                background: Rectangle { color: brandRed; radius: 23 }
+                                contentItem: Text {
+                                    text: parent.text
+                                    color: "#FFFFFF"
+                                    font.bold: true
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                                onClicked: telefam.openPostComposer()
+                            }
+                        }
+
+                        ListView {
+                            visible: telefam.feedPosts.length > 0
+                            anchors.fill: parent
+                            anchors.margins: 20
+                            spacing: 12
+                            clip: true
+                            model: telefam.feedPosts
+                            delegate: Rectangle {
+                                width: Math.min(ListView.view.width, 680)
+                                anchors.horizontalCenter: parent ? parent.horizontalCenter : undefined
+                                height: feedCardCol.implicitHeight + 28
+                                radius: 16
+                                color: cardBg
+                                border.color: borderCol
+                                border.width: 1
+
+                                ColumnLayout {
+                                    id: feedCardCol
+                                    anchors.fill: parent
+                                    anchors.margins: 14
+                                    spacing: 8
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 10
+                                        Rectangle {
+                                            width: 38
+                                            height: 38
+                                            radius: 19
+                                            color: telefam.isDarkTheme ? "#2C1618" : "#FCE8E8"
+                                            Text {
+                                                anchors.centerIn: parent
+                                                text: ((modelData.author_name || "T").slice(0, 1)).toUpperCase()
+                                                color: brandRed
+                                                font.bold: true
+                                            }
+                                        }
+                                        ColumnLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 1
+                                            Text {
+                                                text: modelData.author_name || modelData.author_handle || "User"
+                                                color: inkCol
+                                                font.bold: true
+                                                font.pixelSize: 14
+                                            }
+                                            Text {
+                                                visible: (modelData.author_handle || "").length > 0
+                                                text: "@" + (modelData.author_handle || "")
+                                                color: subCol
+                                                font.pixelSize: 12
+                                            }
+                                        }
+                                        Rectangle {
+                                            height: 24
+                                            width: typeLbl.implicitWidth + 18
+                                            radius: 12
+                                            color: telefam.isDarkTheme ? "#2C1618" : "#FCE8E8"
+                                            Text {
+                                                id: typeLbl
+                                                anchors.centerIn: parent
+                                                text: modelData.post_type || "text"
+                                                color: brandRed
+                                                font.bold: true
+                                                font.pixelSize: 11
+                                            }
+                                        }
+                                    }
+
+                                    Text {
+                                        visible: (modelData.body || "").length > 0
+                                        Layout.fillWidth: true
+                                        text: modelData.body || ""
+                                        color: inkCol
+                                        font.pixelSize: 14
+                                        wrapMode: Text.Wrap
+                                    }
+
+                                    Text {
+                                        visible: (modelData.song_title || "").length > 0
+                                        text: (modelData.song_title || "") + ((modelData.song_artist || "").length > 0 ? " - " + modelData.song_artist : "")
+                                        color: brandRed
+                                        font.pixelSize: 12
+                                        font.bold: true
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Profile Overview Tab (activeTab === 3)
+                    ScrollView {
+                        visible: telefam.activeTab === 3
+                        anchors.fill: parent
+                        contentWidth: availableWidth
+
+                        ColumnLayout {
+                            width: Math.min(parent.width - 48, 520)
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            spacing: 16
+
+                            Item { Layout.preferredHeight: 16 }
+
+                            Rectangle {
+                                Layout.fillWidth: true
+                                height: profileCardCol.implicitHeight + 40
+                                radius: 18
+                                color: cardBg
+                                border.color: borderCol
+                                border.width: 1
+
+                                ColumnLayout {
+                                    id: profileCardCol
+                                    anchors.fill: parent
+                                    anchors.margins: 20
+                                    spacing: 10
+
+                                    Rectangle {
+                                        Layout.alignment: Qt.AlignHCenter
+                                        width: 80
+                                        height: 80
+                                        radius: 40
+                                        color: telefam.isDarkTheme ? "#2C1618" : "#FCE8E8"
+                                        border.color: brandRed
+                                        border.width: 2
+                                        Text {
+                                            anchors.centerIn: parent
+                                            readonly property string dn: telefam.myProfile.full_name || telefam.profileFullName || telefam.email || "TF"
+                                            text: dn.slice(0, 2).toUpperCase()
+                                            color: brandRed
+                                            font.bold: true
+                                            font.pixelSize: 22
+                                        }
+                                    }
+
+                                    Text {
+                                        Layout.alignment: Qt.AlignHCenter
+                                        text: telefam.myProfile.full_name || telefam.profileFullName || "Telefam User"
+                                        color: inkCol
+                                        font.bold: true
+                                        font.pixelSize: 20
+                                    }
+
+                                    Text {
+                                        visible: (telefam.myProfile.username || telefam.profileUsername || "").length > 0
+                                        Layout.alignment: Qt.AlignHCenter
+                                        text: "@" + (telefam.myProfile.username || telefam.profileUsername || "")
+                                        color: subCol
+                                        font.pixelSize: 14
+                                    }
+
+                                    Text {
+                                        Layout.alignment: Qt.AlignHCenter
+                                        text: telefam.myProfile.email || telefam.email
+                                        color: subCol
+                                        font.pixelSize: 13
+                                    }
+
+                                    Text {
+                                        visible: (telefam.myProfile.bio || "").length > 0
+                                        Layout.fillWidth: true
+                                        horizontalAlignment: Text.AlignHCenter
+                                        text: telefam.myProfile.bio || ""
+                                        color: inkCol
+                                        font.pixelSize: 14
+                                        wrapMode: Text.Wrap
+                                    }
+
+                                    Text {
+                                        visible: (telefam.myProfile.location || "").length > 0
+                                        Layout.alignment: Qt.AlignHCenter
+                                        text: telefam.myProfile.location || ""
+                                        color: subCol
+                                        font.pixelSize: 13
+                                    }
+                                }
+                            }
+
+                            Button {
+                                text: "Edit profile"
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 48
+                                background: Rectangle { color: brandRed; radius: 12 }
+                                contentItem: Text {
+                                    text: parent.text
+                                    color: "#FFFFFF"
+                                    font.bold: true
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                                onClicked: telefam.openEditProfile()
+                            }
+
+                            Button {
+                                text: "Sync"
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 48
+                                background: Rectangle {
+                                    color: cardBg
+                                    radius: 12
+                                    border.color: borderCol
+                                    border.width: 1
+                                }
+                                contentItem: Text {
+                                    text: parent.text
+                                    color: inkCol
+                                    font.bold: true
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                                onClicked: telefam.syncNow()
+                            }
+
+                            Button {
+                                text: "Sign out"
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 48
+                                background: Rectangle {
+                                    color: cardBg
+                                    radius: 12
+                                    border.color: brandRed
+                                    border.width: 1
+                                }
+                                contentItem: Text {
+                                    text: parent.text
+                                    color: brandRed
+                                    font.bold: true
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                                onClicked: telefam.signOut()
+                            }
+                        }
+                    }
                 }
             }
         }
     }
 
     Rectangle {
-        readonly property string activeToast: telefam.toastMessage.length > 0 ? telefam.toastMessage : toastText
-        visible: activeToast.length > 0
+        visible: telefam.toastMessage.length > 0
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
         anchors.bottomMargin: 28
@@ -546,10 +861,76 @@ Item {
         Text {
             id: toastLbl
             anchors.centerIn: parent
-            text: parent.activeToast
+            text: telefam.toastMessage
             color: "#FFFFFF"
             font.bold: true
             font.pixelSize: 13
+        }
+    }
+
+    Dialog {
+        id: notificationsDialog
+        title: "Notifications"
+        modal: true
+        anchors.centerIn: parent
+        width: 420
+        height: 360
+        standardButtons: Dialog.Close
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 10
+
+            Button {
+                visible: telefam.unreadNotificationCount > 0
+                text: "Mark all read"
+                Layout.alignment: Qt.AlignRight
+                onClicked: telefam.markNotificationsRead()
+            }
+
+            Text {
+                visible: telefam.notifications.length === 0
+                text: "No notifications"
+                color: subCol
+                Layout.alignment: Qt.AlignHCenter
+            }
+
+            ListView {
+                visible: telefam.notifications.length > 0
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                model: telefam.notifications
+                spacing: 8
+                clip: true
+                delegate: Rectangle {
+                    width: ListView.view.width
+                    height: notifCol.implicitHeight + 16
+                    radius: 10
+                    color: cardBg
+                    border.color: borderCol
+                    border.width: 1
+                    Column {
+                        id: notifCol
+                        anchors.fill: parent
+                        anchors.margins: 8
+                        spacing: 2
+                        Text {
+                            visible: (modelData.actor_name || "").length > 0
+                            text: modelData.actor_name || ""
+                            color: inkCol
+                            font.bold: true
+                            font.pixelSize: 13
+                        }
+                        Text {
+                            text: modelData.message || ""
+                            color: subCol
+                            font.pixelSize: 12
+                            wrapMode: Text.Wrap
+                            width: parent.width
+                        }
+                    }
+                }
+            }
         }
     }
 

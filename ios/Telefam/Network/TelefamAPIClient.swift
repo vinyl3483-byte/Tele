@@ -163,8 +163,225 @@ struct CreatePostResponseIOS: Codable {
     let status: String
 }
 
+struct MyProfilePayload: Codable, Equatable {
+    let user_id: String
+    let email: String
+    let full_name: String
+    let username: String
+    let country_iso: String
+    let phone_number: String
+    let gender: String
+    let date_of_birth: String
+    let location: String
+    let bio: String
+    let avatar_fingerprint_hash: String
+    let profile_completed: Bool
+}
+
+struct FeedPostItem: Codable, Identifiable, Equatable {
+    let post_id: String
+    let author_id: String
+    let author_name: String
+    let author_handle: String
+    let post_type: String
+    let body: String
+    let bg_color_hex: String
+    let bg_theme_id: String
+    let font_family: String
+    let song_title: String
+    let song_artist: String
+    let media_count: Int
+    let hashtags: [String]?
+    let created_at: Int64
+
+    var id: String { post_id }
+}
+
+struct NotificationItem: Codable, Identifiable, Equatable {
+    let id: String
+    let kind: String
+    let actor_name: String
+    let message: String
+    let is_read: Bool
+    let created_at: Int64
+}
+
+struct StreamVariantItem: Codable, Equatable {
+    let label: String
+    let width: Int
+    let height: Int
+    let bitrate_kbps: Int
+    let codec: String
+    let container: String
+    let signed_url: String
+}
+
+struct AudioSummaryItem: Codable, Identifiable, Equatable {
+    let audio_id: String
+    let external_track_id: String
+    let title: String
+    let artist: String
+    let artwork_url: String
+    let preview_url: String
+    let duration_ms: Int64
+    let is_original: Bool
+    let usage_count: Int64
+    var id: String { audio_id.isEmpty ? title : audio_id }
+}
+
+struct FeedVideoItem: Codable, Identifiable, Equatable {
+    let video_id: String
+    let post_id: String
+    let creator_id: String
+    let creator_name: String
+    let creator_username: String
+    let creator_avatar_hash: String
+    var is_following_creator: Bool
+    let is_owner: Bool
+    var title: String
+    var description: String
+    let recommendation_label: String
+    let original_width: Int
+    let original_height: Int
+    let aspect_ratio: Double
+    let duration_ms: Int64
+    let codec: String
+    let file_size: Int64
+    var visibility: String
+    var thumbnail_url: String
+    var stream_url: String
+    var fallback_mp4_url: String
+    var stream_type: String
+    var url_expires_at: Int64
+    var variants: [StreamVariantItem]
+    let audio: AudioSummaryItem
+    let hashtags: [String]
+    var likes_count: Int64
+    var comments_count: Int64
+    var shares_count: Int64
+    var saves_count: Int64
+    var reposts_count: Int64
+    var views_count: Int64
+    var is_liked: Bool
+    var is_saved: Bool
+    var is_reposted: Bool
+    let created_at: Int64
+
+    var id: String { video_id }
+}
+
+struct VideoFeedPagePayload: Codable {
+    let videos: [FeedVideoItem]
+    let next_cursor: String
+    let has_more: Bool
+}
+
+struct RefreshedStreamPayload: Codable {
+    let video_id: String
+    let stream_url: String
+    let fallback_mp4_url: String
+    let thumbnail_url: String
+    let stream_type: String
+    let url_expires_at: Int64
+    let variants: [StreamVariantItem]
+}
+
+struct WatchProgressPayload: Codable {
+    let watch_duration_ms: Int64
+    let last_position_ms: Int64
+    let completion_pct: Double
+    let rewatch_delta: Int
+}
+
+struct VideoLikeResponse: Codable {
+    let likes_count: Int64
+    let is_liked: Bool
+}
+
+struct VideoSaveResponse: Codable {
+    let saves_count: Int64
+    let is_saved: Bool
+}
+
+struct VideoShareResponse: Codable {
+    let shares_count: Int64
+}
+
+struct VideoRepostResponse: Codable {
+    let reposts_count: Int64
+    let is_reposted: Bool
+}
+
+struct UpdateOwnerVideoPayload: Codable {
+    let title: String?
+    let description: String?
+    let visibility: String?
+}
+
+struct HashtagDiscoveryPayload: Codable {
+    let tag: String
+    let video_count: Int64
+    let views_count: Int64
+    let videos: [FeedVideoItem]
+    let next_cursor: String
+    let has_more: Bool
+}
+
+struct AudioDiscoveryPayload: Codable {
+    let audio: AudioSummaryItem
+    let videos: [FeedVideoItem]
+    let next_cursor: String
+    let has_more: Bool
+}
+
+struct CreatorSearchItem: Codable, Identifiable, Equatable {
+    let user_id: String
+    let full_name: String
+    let username: String
+    let avatar_fingerprint_hash: String
+    var is_following: Bool
+    var id: String { user_id }
+}
+
+struct RecentSearchItem: Codable, Identifiable, Equatable {
+    let id: String
+    let query: String
+}
+
+struct FeedSearchPayload: Codable {
+    let query: String
+    let videos: [FeedVideoItem]
+    let hashtags: [HashtagItem]
+    let creators: [CreatorSearchItem]
+    let audios: [AudioSummaryItem]
+    let recent_searches: [RecentSearchItem]
+    let trending: [String]
+    let next_cursor: String
+    let has_more: Bool
+}
+
+struct SafetyUserItem: Codable, Identifiable, Equatable {
+    let user_id: String
+    let full_name: String
+    let username: String
+    let avatar_fingerprint_hash: String
+    var id: String { user_id }
+}
+
+struct SafetyPreferencesPayload: Codable {
+    let muted_users: [SafetyUserItem]
+    let blocked_users: [SafetyUserItem]
+}
+
 enum TelefamAPIError: Error {
     case sanitized(String)
+    case unauthorized(String)
+
+    var message: String {
+        switch self {
+        case .sanitized(let m), .unauthorized(let m): return m
+        }
+    }
 }
 
 private final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate {
@@ -199,14 +416,21 @@ final class TelefamAPIClient {
         return comps.url ?? URL(fileURLWithPath: "/")
     }()
 
+    private static func isAllowedBaseURL(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased() else {
+            return false
+        }
+        if scheme == "https" { return !host.isEmpty }
+        if scheme == "http" { return host == "localhost" || host == "127.0.0.1" }
+        return false
+    }
+
     init(baseURL: URL? = nil) {
-        if let provided = baseURL {
+        if let provided = baseURL, Self.isAllowedBaseURL(provided) {
             self.baseURL = provided
         } else if let raw = Bundle.main.object(forInfoDictionaryKey: "TELEFAM_API_BASE_URL") as? String {
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty,
-               (trimmed.hasPrefix("https://") || trimmed.hasPrefix("http://")),
-               let parsed = URL(string: trimmed) {
+            if !trimmed.isEmpty, let parsed = URL(string: trimmed), Self.isAllowedBaseURL(parsed) {
                 self.baseURL = parsed
             } else {
                 self.baseURL = Self.fallbackBaseURL
@@ -260,6 +484,59 @@ final class TelefamAPIClient {
             "platform": "ios"
         ]
         return try await post(path: "/v1/auth/oauth/\(provider)", body: body, token: nil)
+    }
+
+    func refreshSession(refreshToken: String, deviceFP: String, hwAttest: String) async throws -> AuthSessionPayload {
+        let body: [String: String] = [
+            "refresh_token": refreshToken,
+            "device_fingerprint": deviceFP,
+            "hardware_attestation": hwAttest,
+            "platform": "ios"
+        ]
+        return try await post(path: "/v1/auth/refresh", body: body, token: nil)
+    }
+
+    func logoutSession(token: String) async {
+        struct EmptyReq: Encodable {}
+        struct EmptyRes: Decodable {}
+        let _: EmptyRes? = try? await post(path: "/v1/auth/logout", body: EmptyReq(), token: token)
+    }
+
+    func getMyProfile(token: String) async throws -> MyProfilePayload {
+        try await get(path: "/v1/profile/me", token: token)
+    }
+
+    func listFeedPosts(token: String, query: String, limit: Int = 30) async throws -> [FeedPostItem] {
+        guard var components = URLComponents(url: baseURL.appendingPathComponent("/v1/posts/feed"), resolvingAgainstBaseURL: false) else {
+            return []
+        }
+        components.queryItems = [
+            URLQueryItem(name: "q", value: query),
+            URLQueryItem(name: "limit", value: String(limit))
+        ]
+        guard let url = components.url else { return [] }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await perform(req)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw Self.mapHTTPError(code)
+        }
+        struct Wrapper: Codable { let posts: [FeedPostItem]? }
+        return try JSONDecoder().decode(Wrapper.self, from: data).posts ?? []
+    }
+
+    func listNotifications(token: String) async throws -> [NotificationItem] {
+        struct Wrapper: Codable { let notifications: [NotificationItem]? }
+        let res: Wrapper = try await get(path: "/v1/notifications", token: token)
+        return res.notifications ?? []
+    }
+
+    func markNotificationsRead(token: String) async throws {
+        struct EmptyReq: Encodable {}
+        struct OkRes: Decodable { let ok: Bool? }
+        let _: OkRes = try await post(path: "/v1/notifications/read", body: EmptyReq(), token: token)
     }
 
     func uploadAvatar(token: String, jpegData: Data) async throws -> AvatarUploadResponse {
@@ -497,6 +774,142 @@ final class TelefamAPIClient {
         try await post(path: "/v1/posts", body: request, token: token)
     }
 
+    // MARK: - Short-Video Feed, Discovery, Search & Safety
+
+    func resolveMediaURL(_ rawPathOrURL: String) -> URL? {
+        let trimmed = rawPathOrURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("https://") || trimmed.hasPrefix("http://") {
+            return URL(string: trimmed)
+        }
+        let clean = trimmed.hasPrefix("/") ? String(trimmed.dropFirst()) : trimmed
+        return baseURL.appendingPathComponent(clean)
+    }
+
+    func getForYouFeed(token: String, cursor: String = "", limit: Int = 15) async throws -> VideoFeedPagePayload {
+        try await getWithQuery(path: "/v1/feed/for-you", items: [
+            URLQueryItem(name: "cursor", value: cursor),
+            URLQueryItem(name: "limit", value: String(limit))
+        ], token: token)
+    }
+
+    func getFollowingFeed(token: String, cursor: String = "", limit: Int = 15) async throws -> VideoFeedPagePayload {
+        try await getWithQuery(path: "/v1/feed/following", items: [
+            URLQueryItem(name: "cursor", value: cursor),
+            URLQueryItem(name: "limit", value: String(limit))
+        ], token: token)
+    }
+
+    func refreshStreamURL(token: String, videoId: String) async throws -> RefreshedStreamPayload {
+        try await get(path: "/v1/videos/\(videoId)/refresh-stream-url", token: token)
+    }
+
+    func recordVideoView(token: String, videoId: String, progress: WatchProgressPayload) async throws {
+        let _: EmptyOKPayload = try await sendJSON(method: "POST", path: "/v1/videos/\(videoId)/view", body: progress, token: token)
+    }
+
+    func recordWatchProgress(token: String, videoId: String, progress: WatchProgressPayload) async throws {
+        let _: EmptyOKPayload = try await sendJSON(method: "POST", path: "/v1/videos/\(videoId)/watch-progress", body: progress, token: token)
+    }
+
+    func setVideoLiked(token: String, videoId: String, liked: Bool) async throws -> VideoLikeResponse {
+        try await sendNoBody(method: liked ? "POST" : "DELETE", path: "/v1/videos/\(videoId)/like", token: token)
+    }
+
+    func setVideoSaved(token: String, videoId: String, saved: Bool) async throws -> VideoSaveResponse {
+        try await sendNoBody(method: saved ? "POST" : "DELETE", path: "/v1/videos/\(videoId)/save", token: token)
+    }
+
+    func shareVideo(token: String, videoId: String, channel: String = "link") async throws -> VideoShareResponse {
+        try await post(path: "/v1/videos/\(videoId)/share", body: ["channel": channel], token: token)
+    }
+
+    func setVideoReposted(token: String, videoId: String, reposted: Bool) async throws -> VideoRepostResponse {
+        try await sendNoBody(method: reposted ? "POST" : "DELETE", path: "/v1/videos/\(videoId)/repost", token: token)
+    }
+
+    func markNotInterested(token: String, videoId: String) async throws {
+        let _: EmptyOKPayload = try await sendNoBody(method: "POST", path: "/v1/videos/\(videoId)/not-interested", token: token)
+    }
+
+    func reportVideo(token: String, videoId: String, reason: String, details: String) async throws {
+        let _: EmptyOKPayload = try await sendJSON(
+            method: "POST",
+            path: "/v1/videos/\(videoId)/report",
+            body: ["reason": reason, "details": details],
+            token: token
+        )
+    }
+
+    func updateOwnerVideo(token: String, videoId: String, payload: UpdateOwnerVideoPayload) async throws -> FeedVideoItem {
+        try await sendJSON(method: "PATCH", path: "/v1/videos/\(videoId)", body: payload, token: token)
+    }
+
+    func deleteOwnerVideo(token: String, videoId: String) async throws {
+        let _: EmptyOKPayload = try await sendNoBody(method: "DELETE", path: "/v1/videos/\(videoId)", token: token)
+    }
+
+    func setUserBlocked(token: String, userId: String, blocked: Bool) async throws {
+        let _: EmptyOKPayload = try await sendNoBody(method: blocked ? "POST" : "DELETE", path: "/v1/users/\(userId)/block", token: token)
+    }
+
+    func setUserMuted(token: String, userId: String, muted: Bool) async throws {
+        let _: EmptyOKPayload = try await sendNoBody(method: muted ? "POST" : "DELETE", path: "/v1/users/\(userId)/mute", token: token)
+    }
+
+    func listSavedVideos(token: String, cursor: String = "", limit: Int = 21) async throws -> VideoFeedPagePayload {
+        try await getWithQuery(path: "/v1/me/saved-videos", items: [
+            URLQueryItem(name: "cursor", value: cursor),
+            URLQueryItem(name: "limit", value: String(limit))
+        ], token: token)
+    }
+
+    func listSafetyPreferences(token: String) async throws -> SafetyPreferencesPayload {
+        try await get(path: "/v1/me/safety", token: token)
+    }
+
+    func getHashtagDiscovery(token: String, tag: String, cursor: String = "", limit: Int = 21) async throws -> HashtagDiscoveryPayload {
+        let clean = tag.replacingOccurrences(of: "#", with: "")
+            .addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? tag
+        return try await getWithQuery(path: "/v1/hashtags/\(clean)/videos", items: [
+            URLQueryItem(name: "cursor", value: cursor),
+            URLQueryItem(name: "limit", value: String(limit))
+        ], token: token)
+    }
+
+    func getAudioDiscovery(token: String, audioId: String, cursor: String = "", limit: Int = 21) async throws -> AudioDiscoveryPayload {
+        let clean = audioId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? audioId
+        return try await getWithQuery(path: "/v1/audios/\(clean)/videos", items: [
+            URLQueryItem(name: "cursor", value: cursor),
+            URLQueryItem(name: "limit", value: String(limit))
+        ], token: token)
+    }
+
+    func searchAll(token: String, query: String, cursor: String = "", limit: Int = 20) async throws -> FeedSearchPayload {
+        try await getWithQuery(path: "/v1/search", items: [
+            URLQueryItem(name: "q", value: query),
+            URLQueryItem(name: "cursor", value: cursor),
+            URLQueryItem(name: "limit", value: String(limit))
+        ], token: token)
+    }
+
+    func clearSearchHistory(token: String) async throws {
+        let _: EmptyOKPayload = try await sendNoBody(method: "DELETE", path: "/v1/search/history", token: token)
+    }
+
+    func deleteSearchHistoryItem(token: String, id: String) async throws {
+        let _: EmptyOKPayload = try await sendNoBody(method: "DELETE", path: "/v1/search/history/\(id)", token: token)
+    }
+
+    private struct EmptyOKPayload: Decodable {
+        let ok: Bool?
+    }
+
+    private static func mapHTTPError(_ code: Int) -> TelefamAPIError {
+        let msg = TelefamCoreBridge.sanitizeError(httpStatus: Int32(code))
+        return code == 401 ? .unauthorized(msg) : .sanitized(msg)
+    }
+
     private func get<T: Decodable>(path: String, token: String?) async throws -> T {
         var req = URLRequest(url: baseURL.appendingPathComponent(path))
         req.httpMethod = "GET"
@@ -504,21 +917,62 @@ final class TelefamAPIClient {
         let (data, response) = try await perform(req)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-            throw TelefamAPIError.sanitized(TelefamCoreBridge.sanitizeError(httpStatus: Int32(code)))
+            throw Self.mapHTTPError(code)
+        }
+        return try JSONDecoder().decode(T.self, from: data)
+    }
+
+    private func getWithQuery<T: Decodable>(path: String, items: [URLQueryItem], token: String?) async throws -> T {
+        guard var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false) else {
+            throw TelefamAPIError.sanitized(TelefamCoreBridge.sanitizeError(httpStatus: 400))
+        }
+        components.queryItems = items
+        guard let url = components.url else {
+            throw TelefamAPIError.sanitized(TelefamCoreBridge.sanitizeError(httpStatus: 400))
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        let (data, response) = try await perform(req)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw Self.mapHTTPError(code)
         }
         return try JSONDecoder().decode(T.self, from: data)
     }
 
     private func post<B: Encodable, T: Decodable>(path: String, body: B, token: String?) async throws -> T {
+        try await sendJSON(method: "POST", path: path, body: body, token: token)
+    }
+
+    private func sendJSON<B: Encodable, T: Decodable>(method: String, path: String, body: B, token: String?) async throws -> T {
         var req = URLRequest(url: baseURL.appendingPathComponent(path))
-        req.httpMethod = "POST"
+        req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         req.httpBody = try JSONEncoder().encode(body)
         let (data, response) = try await perform(req)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-            throw TelefamAPIError.sanitized(TelefamCoreBridge.sanitizeError(httpStatus: Int32(code)))
+            throw Self.mapHTTPError(code)
+        }
+        if data.isEmpty, T.self == EmptyOKPayload.self {
+            return EmptyOKPayload(ok: true) as! T
+        }
+        return try JSONDecoder().decode(T.self, from: data)
+    }
+
+    private func sendNoBody<T: Decodable>(method: String, path: String, token: String?) async throws -> T {
+        var req = URLRequest(url: baseURL.appendingPathComponent(path))
+        req.httpMethod = method
+        if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        let (data, response) = try await perform(req)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw Self.mapHTTPError(code)
+        }
+        if data.isEmpty, T.self == EmptyOKPayload.self {
+            return EmptyOKPayload(ok: true) as! T
         }
         return try JSONDecoder().decode(T.self, from: data)
     }

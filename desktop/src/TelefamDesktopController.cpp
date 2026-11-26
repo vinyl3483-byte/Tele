@@ -18,6 +18,7 @@
 #include <QNetworkRequest>
 #include <QPainter>
 #include <QProcess>
+#include <QRandomGenerator>
 #include <QStandardPaths>
 #include <QSysInfo>
 #include <QTimeZone>
@@ -36,7 +37,19 @@
 
 TelefamDesktopController::TelefamDesktopController(QObject* parent)
     : QObject(parent) {
-    apiBase_ = qEnvironmentVariable("TELEFAM_API_BASE_URL", QStringLiteral("https://api.telefam.app"));
+    const QString fallbackApi = QStringLiteral("https://api.telefam.app");
+    const QString envBase = qEnvironmentVariable("TELEFAM_API_BASE_URL", fallbackApi).trimmed();
+    const QUrl parsedBase(envBase);
+    const QString scheme = parsedBase.scheme().toLower();
+    const QString host = parsedBase.host().toLower();
+    if (parsedBase.isValid() && !host.isEmpty() &&
+        (scheme == QStringLiteral("https") ||
+         (scheme == QStringLiteral("http") && (host == QStringLiteral("localhost") || host == QStringLiteral("127.0.0.1"))))) {
+        apiBase_ = parsedBase.toString(QUrl::StripTrailingSlash);
+    } else {
+        apiBase_ = fallbackApi;
+    }
+
     deviceName_ = QSysInfo::machineHostName();
     if (deviceName_.isEmpty()) deviceName_ = QStringLiteral("Desktop");
 
@@ -44,10 +57,30 @@ TelefamDesktopController::TelefamDesktopController(QObject* parent)
     QDir().mkpath(appDir);
     const QString vaultPath = appDir + QStringLiteral("/telefam_vault.dat");
 
+    const QString saltPath = appDir + QStringLiteral("/.vault_salt");
+    QByteArray saltBytes;
+    {
+        QFile saltFile(saltPath);
+        if (saltFile.open(QIODevice::ReadOnly)) {
+            saltBytes = saltFile.read(32);
+            saltFile.close();
+        }
+    }
+    if (saltBytes.size() != 32) {
+        saltBytes.resize(32);
+        QRandomGenerator::system()->fillRange(reinterpret_cast<quint32*>(saltBytes.data()), 8);
+        QFile saltOut(saltPath);
+        if (saltOut.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            saltOut.write(saltBytes);
+            saltOut.close();
+            saltOut.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+        }
+    }
+
     const QByteArray hwRaw = QSysInfo::machineUniqueId() + "|" + QSysInfo::prettyProductName().toUtf8();
     const auto keyVec = telefam::crypto::hkdf_sha256(
         reinterpret_cast<const uint8_t*>(hwRaw.constData()), static_cast<size_t>(hwRaw.size()),
-        nullptr, 0,
+        reinterpret_cast<const uint8_t*>(saltBytes.constData()), static_cast<size_t>(saltBytes.size()),
         reinterpret_cast<const uint8_t*>("telefam-desktop-key-v1"), 22, 32
     );
     engine_ = telefam_engine_create(vaultPath.toUtf8().constData(), keyVec.data(), 32);
@@ -142,7 +175,55 @@ void TelefamDesktopController::selectTab(int tabIndex) {
     }
     if (tabIndex == 1) {
         refreshContacts(true);
+    } else if (tabIndex == 2) {
+        refreshFeedPosts();
+    } else if (tabIndex == 3) {
+        refreshMyProfile();
     }
+}
+
+void TelefamDesktopController::setHomeSearchQuery(const QString& query) {
+    if (homeSearchQuery_ != query) {
+        homeSearchQuery_ = query;
+        emit homeSearchChanged();
+        emit conversationsChanged();
+        emit feedChanged();
+    }
+}
+
+QVariantList TelefamDesktopController::filteredConversations() const {
+    const QString q = homeSearchQuery_.trimmed().toLower();
+    if (q.isEmpty()) return conversations_;
+    QVariantList out;
+    for (const auto& item : conversations_) {
+        if (item.toMap().value("title").toString().toLower().contains(q)) {
+            out.append(item);
+        }
+    }
+    return out;
+}
+
+QVariantList TelefamDesktopController::feedPosts() const {
+    const QString q = homeSearchQuery_.trimmed().toLower();
+    if (q.isEmpty()) return feedPosts_;
+    QVariantList out;
+    for (const auto& item : feedPosts_) {
+        const auto m = item.toMap();
+        if (m.value("body").toString().toLower().contains(q) ||
+            m.value("author_name").toString().toLower().contains(q) ||
+            m.value("author_handle").toString().toLower().contains(q)) {
+            out.append(item);
+        }
+    }
+    return out;
+}
+
+int TelefamDesktopController::unreadNotificationCount() const {
+    int count = 0;
+    for (const auto& item : notifications_) {
+        if (!item.toMap().value("is_read").toBool()) ++count;
+    }
+    return count;
 }
 
 void TelefamDesktopController::selectContactFilter(const QString& filter) {
@@ -600,6 +681,8 @@ void TelefamDesktopController::submitProfileSetup(
         telefam_outbox_enqueue(engine_, mutId.toUtf8().constData(), "profile_setup", payload.constData(),
                                QDateTime::currentMSecsSinceEpoch());
         emit outboxChanged();
+        isEditingProfile_ = false;
+        emit editingProfileChanged();
         lastSessionObj_.insert("profile_completed", true);
         lastSessionObj_.insert("display_name", fn);
         persistSession(lastSessionObj_);
@@ -610,6 +693,8 @@ void TelefamDesktopController::submitProfileSetup(
     postJson(QStringLiteral("/v1/profile/setup"), reqObj, true, [this, fn](int status, const QByteArray&) {
         setLoading(false);
         if (status >= 200 && status < 300) {
+            isEditingProfile_ = false;
+            emit editingProfileChanged();
             lastSessionObj_.insert("profile_completed", true);
             lastSessionObj_.insert("display_name", fn);
             persistSession(lastSessionObj_);
@@ -694,6 +779,10 @@ void TelefamDesktopController::syncNow() {
             QVariantList list;
             for (const auto& v : arr) list.append(v.toObject().toVariantMap());
             conversations_ = list;
+            const QByteArray cBytes = QJsonDocument(arr).toJson(QJsonDocument::Compact);
+            telefam_vault_put(engine_, "conversations_json",
+                              reinterpret_cast<const uint8_t*>(cBytes.constData()),
+                              static_cast<size_t>(cBytes.size()));
             emit conversationsChanged();
         }
     });
@@ -716,18 +805,145 @@ void TelefamDesktopController::syncNow() {
     }
 
     refreshContacts(true);
+    refreshMyProfile();
+    refreshFeedPosts();
+    refreshNotifications();
     flushQueuedPosts();
 }
 
+void TelefamDesktopController::refreshMyProfile() {
+    if (accessToken_.isEmpty() || isOffline_) return;
+    getJson(QStringLiteral("/v1/profile/me"), [this](int status, const QByteArray& raw) {
+        if (status >= 200 && status < 300) {
+            const auto obj = QJsonDocument::fromJson(raw).object();
+            myProfile_ = obj.toVariantMap();
+            const QByteArray bytes = QJsonDocument(obj).toJson(QJsonDocument::Compact);
+            telefam_vault_put(engine_, "my_profile_json",
+                              reinterpret_cast<const uint8_t*>(bytes.constData()),
+                              static_cast<size_t>(bytes.size()));
+            emit myProfileChanged();
+        }
+    });
+}
+
+void TelefamDesktopController::refreshFeedPosts() {
+    if (accessToken_.isEmpty() || isOffline_) {
+        if (feedLoading_) {
+            feedLoading_ = false;
+            emit feedChanged();
+        }
+        return;
+    }
+    feedLoading_ = true;
+    emit feedChanged();
+    QUrlQuery q;
+    q.addQueryItem(QStringLiteral("q"), homeSearchQuery_.trimmed());
+    q.addQueryItem(QStringLiteral("limit"), QStringLiteral("30"));
+    getJson(QStringLiteral("/v1/posts/feed?") + q.toString(QUrl::FullyEncoded), [this](int status, const QByteArray& raw) {
+        feedLoading_ = false;
+        if (status >= 200 && status < 300) {
+            const auto arr = QJsonDocument::fromJson(raw).object().value("posts").toArray();
+            QVariantList list;
+            for (const auto& v : arr) list.append(v.toObject().toVariantMap());
+            feedPosts_ = list;
+            if (homeSearchQuery_.trimmed().isEmpty()) {
+                const QByteArray bytes = QJsonDocument(arr).toJson(QJsonDocument::Compact);
+                telefam_vault_put(engine_, "feed_cache_json",
+                                  reinterpret_cast<const uint8_t*>(bytes.constData()),
+                                  static_cast<size_t>(bytes.size()));
+            }
+        }
+        emit feedChanged();
+    });
+}
+
+void TelefamDesktopController::refreshNotifications() {
+    if (accessToken_.isEmpty() || isOffline_) return;
+    getJson(QStringLiteral("/v1/notifications"), [this](int status, const QByteArray& raw) {
+        if (status >= 200 && status < 300) {
+            const auto arr = QJsonDocument::fromJson(raw).object().value("notifications").toArray();
+            QVariantList list;
+            for (const auto& v : arr) list.append(v.toObject().toVariantMap());
+            notifications_ = list;
+            const QByteArray bytes = QJsonDocument(arr).toJson(QJsonDocument::Compact);
+            telefam_vault_put(engine_, "notifications_json",
+                              reinterpret_cast<const uint8_t*>(bytes.constData()),
+                              static_cast<size_t>(bytes.size()));
+            emit notificationsChanged();
+        }
+    });
+}
+
+void TelefamDesktopController::markNotificationsRead() {
+    QJsonArray updatedArr;
+    QVariantList updatedList;
+    for (const auto& item : notifications_) {
+        auto m = item.toMap();
+        m.insert("is_read", true);
+        updatedList.append(m);
+        updatedArr.append(QJsonObject::fromVariantMap(m));
+    }
+    notifications_ = updatedList;
+    const QByteArray bytes = QJsonDocument(updatedArr).toJson(QJsonDocument::Compact);
+    telefam_vault_put(engine_, "notifications_json",
+                      reinterpret_cast<const uint8_t*>(bytes.constData()),
+                      static_cast<size_t>(bytes.size()));
+    emit notificationsChanged();
+    if (!accessToken_.isEmpty() && !isOffline_) {
+        postJson(QStringLiteral("/v1/notifications/read"), QJsonObject{}, true, [](int, const QByteArray&) {});
+    }
+}
+
+void TelefamDesktopController::openEditProfile() {
+    if (!myProfile_.isEmpty()) {
+        profileFullName_ = myProfile_.value("full_name").toString();
+        profileUsername_ = myProfile_.value("username").toString();
+        const QString cIso = myProfile_.value("country_iso").toString();
+        if (!cIso.isEmpty()) profileCountryIso_ = cIso;
+        profileLocation_ = myProfile_.value("location").toString();
+        avatarFingerprintHash_ = myProfile_.value("avatar_fingerprint_hash").toString();
+        emit profileSeedChanged();
+    } else if (!email_.isEmpty()) {
+        seedProfileFromEmail(email_);
+    }
+    setError(QString());
+    isEditingProfile_ = true;
+    emit editingProfileChanged();
+}
+
+void TelefamDesktopController::closeEditProfile() {
+    setError(QString());
+    isEditingProfile_ = false;
+    emit editingProfileChanged();
+}
+
 void TelefamDesktopController::signOut() {
+    if (!accessToken_.isEmpty() && !isOffline_) {
+        QNetworkRequest req(QUrl(apiBase_ + QStringLiteral("/v1/auth/logout")));
+        req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+        req.setTransferTimeout(5000);
+        req.setRawHeader("Authorization", QByteArray("Bearer ") + accessToken_.toUtf8());
+        auto* reply = nam_.post(req, QByteArrayLiteral("{}"));
+        connect(reply, &QNetworkReply::finished, reply, &QNetworkReply::deleteLater);
+    }
     stopAudioPreview();
     telefam_vault_delete(engine_, "session_json");
+    telefam_vault_delete(engine_, "conversations_json");
     telefam_vault_delete(engine_, "contacts_cache_json");
     telefam_vault_delete(engine_, "queued_posts_json");
+    telefam_vault_delete(engine_, "my_profile_json");
+    telefam_vault_delete(engine_, "feed_cache_json");
+    telefam_vault_delete(engine_, "notifications_json");
     accessToken_.clear();
+    refreshToken_.clear();
     userId_.clear();
     profileCompleted_ = false;
+    isEditingProfile_ = false;
     lastSessionObj_ = QJsonObject{};
+    myProfile_.clear();
+    feedPosts_.clear();
+    notifications_.clear();
+    homeSearchQuery_.clear();
     conversations_.clear();
     messages_.clear();
     cachedContacts_.clear();
@@ -737,6 +953,11 @@ void TelefamDesktopController::signOut() {
     authStep_ = 0;
     postComposerOpen_ = false;
     emit sessionChanged();
+    emit editingProfileChanged();
+    emit myProfileChanged();
+    emit feedChanged();
+    emit notificationsChanged();
+    emit homeSearchChanged();
     emit authStepChanged();
     emit activeTabChanged();
     emit conversationsChanged();
@@ -1400,6 +1621,7 @@ void TelefamDesktopController::seedProfileFromEmail(const QString& email) {
 void TelefamDesktopController::persistSession(const QJsonObject& obj) {
     lastSessionObj_ = obj;
     accessToken_ = obj.value("access_token").toString();
+    refreshToken_ = obj.value("refresh_token").toString();
     userId_ = obj.value("user_id").toString();
     email_ = obj.value("email").toString();
     profileCompleted_ = obj.value("profile_completed").toBool(false);
@@ -1429,6 +1651,7 @@ void TelefamDesktopController::restoreSession() {
         const auto obj = QJsonDocument::fromJson(QByteArray(reinterpret_cast<const char*>(buf), static_cast<int>(outLen))).object();
         lastSessionObj_ = obj;
         accessToken_ = obj.value("access_token").toString();
+        refreshToken_ = obj.value("refresh_token").toString();
         userId_ = obj.value("user_id").toString();
         email_ = obj.value("email").toString();
         profileCompleted_ = obj.value("profile_completed").toBool(false);
@@ -1438,25 +1661,80 @@ void TelefamDesktopController::restoreSession() {
         emit sessionChanged();
     }
 
-    size_t cLen = 0;
-    std::vector<uint8_t> cbuf(65536, 0);
-    auto cStatus = telefam_vault_get(engine_, "contacts_cache_json", cbuf.data(), cbuf.size(), &cLen);
-    if (cStatus == TELEFAM_ERR_STORAGE && cLen > cbuf.size()) {
-        cbuf.resize(cLen);
-        cStatus = telefam_vault_get(engine_, "contacts_cache_json", cbuf.data(), cbuf.size(), &cLen);
-    }
-    if (cStatus == TELEFAM_OK && cLen > 0) {
-        const auto arr = QJsonDocument::fromJson(QByteArray(reinterpret_cast<const char*>(cbuf.data()), static_cast<int>(cLen))).array();
-        cachedContacts_.clear();
-        for (const auto& v : arr) {
-            cachedContacts_.append(v.toObject().toVariantMap());
+    auto readVaultArray = [this](const char* key) -> QJsonArray {
+        size_t len = 0;
+        std::vector<uint8_t> vbuf(65536, 0);
+        auto st = telefam_vault_get(engine_, key, vbuf.data(), vbuf.size(), &len);
+        if (st == TELEFAM_ERR_STORAGE && len > vbuf.size()) {
+            vbuf.resize(len);
+            st = telefam_vault_get(engine_, key, vbuf.data(), vbuf.size(), &len);
         }
+        if (st == TELEFAM_OK && len > 0) {
+            return QJsonDocument::fromJson(QByteArray(reinterpret_cast<const char*>(vbuf.data()), static_cast<int>(len))).array();
+        }
+        return QJsonArray{};
+    };
+
+    {
+        const auto arr = readVaultArray("contacts_cache_json");
+        cachedContacts_.clear();
+        for (const auto& v : arr) cachedContacts_.append(v.toObject().toVariantMap());
         rebuildFilteredContacts();
+    }
+    {
+        const auto arr = readVaultArray("conversations_json");
+        conversations_.clear();
+        for (const auto& v : arr) conversations_.append(v.toObject().toVariantMap());
+        emit conversationsChanged();
+    }
+    {
+        const auto arr = readVaultArray("feed_cache_json");
+        feedPosts_.clear();
+        for (const auto& v : arr) feedPosts_.append(v.toObject().toVariantMap());
+        emit feedChanged();
+    }
+    {
+        const auto arr = readVaultArray("notifications_json");
+        notifications_.clear();
+        for (const auto& v : arr) notifications_.append(v.toObject().toVariantMap());
+        emit notificationsChanged();
+    }
+    {
+        uint8_t pbuf[32768]{};
+        size_t plen = 0;
+        if (telefam_vault_get(engine_, "my_profile_json", pbuf, sizeof(pbuf), &plen) == TELEFAM_OK && plen > 0) {
+            myProfile_ = QJsonDocument::fromJson(QByteArray(reinterpret_cast<const char*>(pbuf), static_cast<int>(plen))).object().toVariantMap();
+            emit myProfileChanged();
+        }
     }
 }
 
+void TelefamDesktopController::refreshSessionAndThen(std::function<void(bool)> done) {
+    if (refreshToken_.isEmpty() || isOffline_) {
+        done(false);
+        return;
+    }
+    QJsonObject body{
+        {"refresh_token", refreshToken_},
+        {"device_fingerprint", deviceFP_},
+        {"hardware_attestation", hwAttest_},
+        {"platform", "desktop"}
+    };
+    postJson(QStringLiteral("/v1/auth/refresh"), body, false, [this, done](int status, const QByteArray& raw) {
+        if (status >= 200 && status < 300) {
+            const auto obj = QJsonDocument::fromJson(raw).object();
+            if (!obj.value("access_token").toString().isEmpty()) {
+                persistSession(obj);
+                done(true);
+                return;
+            }
+        }
+        done(false);
+    }, false);
+}
+
 void TelefamDesktopController::postJson(const QString& path, const QJsonObject& body, bool authed,
-                                        std::function<void(int, const QByteArray&)> callback) {
+                                        std::function<void(int, const QByteArray&)> callback, bool allowRefresh) {
     QNetworkRequest req(QUrl(apiBase_ + path));
     req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     req.setTransferTimeout(12000);
@@ -1464,25 +1742,45 @@ void TelefamDesktopController::postJson(const QString& path, const QJsonObject& 
         req.setRawHeader("Authorization", QByteArray("Bearer ") + accessToken_.toUtf8());
     }
     auto* reply = nam_.post(req, QJsonDocument(body).toJson(QJsonDocument::Compact));
-    connect(reply, &QNetworkReply::finished, this, [reply, callback]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, path, body, authed, callback, allowRefresh]() {
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const QByteArray data = reply->readAll();
         reply->deleteLater();
+        if (status == 401 && authed && allowRefresh && !refreshToken_.isEmpty()) {
+            refreshSessionAndThen([this, path, body, authed, callback](bool ok) {
+                if (ok) {
+                    postJson(path, body, authed, callback, false);
+                } else {
+                    callback(401, QByteArray());
+                }
+            });
+            return;
+        }
         callback(status, data);
     });
 }
 
-void TelefamDesktopController::getJson(const QString& path, std::function<void(int, const QByteArray&)> callback) {
+void TelefamDesktopController::getJson(const QString& path, std::function<void(int, const QByteArray&)> callback, bool allowRefresh) {
     QNetworkRequest req(QUrl(apiBase_ + path));
     req.setTransferTimeout(12000);
     if (!accessToken_.isEmpty()) {
         req.setRawHeader("Authorization", QByteArray("Bearer ") + accessToken_.toUtf8());
     }
     auto* reply = nam_.get(req);
-    connect(reply, &QNetworkReply::finished, this, [reply, callback]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, path, callback, allowRefresh]() {
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const QByteArray data = reply->readAll();
         reply->deleteLater();
+        if (status == 401 && allowRefresh && !refreshToken_.isEmpty()) {
+            refreshSessionAndThen([this, path, callback](bool ok) {
+                if (ok) {
+                    getJson(path, callback, false);
+                } else {
+                    callback(401, QByteArray());
+                }
+            });
+            return;
+        }
         callback(status, data);
     });
 }

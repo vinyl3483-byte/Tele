@@ -8,6 +8,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVariantList>
+#include <QVariantMap>
 #include <functional>
 
 class TelefamDesktopController : public QObject {
@@ -34,14 +35,22 @@ class TelefamDesktopController : public QObject {
     Q_PROPERTY(QString profileLocation READ profileLocation NOTIFY profileSeedChanged)
     Q_PROPERTY(QString avatarDataUrl READ avatarDataUrl NOTIFY avatarChanged)
 
-    // Contacts & navigation tab
+    // Contacts, Feeds, Profile, Search & Notifications
     Q_PROPERTY(int activeTab READ activeTab NOTIFY activeTabChanged)
+    Q_PROPERTY(QString homeSearchQuery READ homeSearchQuery WRITE setHomeSearchQuery NOTIFY homeSearchChanged)
+    Q_PROPERTY(QVariantList filteredConversations READ filteredConversations NOTIFY conversationsChanged)
     Q_PROPERTY(QVariantList contacts READ contacts NOTIFY contactsChanged)
     Q_PROPERTY(QString contactFilter READ contactFilter NOTIFY contactsChanged)
     Q_PROPERTY(QString contactSearchQuery READ contactSearchQuery NOTIFY contactsChanged)
     Q_PROPERTY(bool contactsLoading READ contactsLoading NOTIFY contactsChanged)
     Q_PROPERTY(bool hasMoreContacts READ hasMoreContacts NOTIFY contactsChanged)
     Q_PROPERTY(QString toastMessage READ toastMessage NOTIFY toastChanged)
+    Q_PROPERTY(bool isEditingProfile READ isEditingProfile NOTIFY editingProfileChanged)
+    Q_PROPERTY(QVariantMap myProfile READ myProfile NOTIFY myProfileChanged)
+    Q_PROPERTY(QVariantList feedPosts READ feedPosts NOTIFY feedChanged)
+    Q_PROPERTY(bool feedLoading READ feedLoading NOTIFY feedChanged)
+    Q_PROPERTY(QVariantList notifications READ notifications NOTIFY notificationsChanged)
+    Q_PROPERTY(int unreadNotificationCount READ unreadNotificationCount NOTIFY notificationsChanged)
 
     // New Post composer state
     Q_PROPERTY(bool postComposerOpen READ postComposerOpen NOTIFY postComposerChanged)
@@ -88,12 +97,21 @@ public:
     QString avatarDataUrl() const { return avatarDataUrl_; }
 
     int activeTab() const { return activeTab_; }
+    QString homeSearchQuery() const { return homeSearchQuery_; }
+    void setHomeSearchQuery(const QString& query);
+    QVariantList filteredConversations() const;
     QVariantList contacts() const { return filteredContacts_; }
     QString contactFilter() const { return contactFilter_; }
     QString contactSearchQuery() const { return contactSearchQuery_; }
     bool contactsLoading() const { return contactsLoading_; }
     bool hasMoreContacts() const { return hasMoreContacts_; }
     QString toastMessage() const { return toastMessage_; }
+    bool isEditingProfile() const { return isEditingProfile_; }
+    QVariantMap myProfile() const { return myProfile_; }
+    QVariantList feedPosts() const;
+    bool feedLoading() const { return feedLoading_; }
+    QVariantList notifications() const { return notifications_; }
+    int unreadNotificationCount() const;
 
     bool postComposerOpen() const { return postComposerOpen_; }
     QVariantList postMusicResults() const { return postMusicResults_; }
@@ -138,6 +156,12 @@ public:
     Q_INVOKABLE void createConversation(const QString& title);
     Q_INVOKABLE void sendMessageOfflineFirst(const QString& body);
     Q_INVOKABLE void syncNow();
+    Q_INVOKABLE void refreshFeedPosts();
+    Q_INVOKABLE void refreshMyProfile();
+    Q_INVOKABLE void refreshNotifications();
+    Q_INVOKABLE void markNotificationsRead();
+    Q_INVOKABLE void openEditProfile();
+    Q_INVOKABLE void closeEditProfile();
     Q_INVOKABLE void signOut();
 
     // New Post composer actions
@@ -185,8 +209,13 @@ signals:
     void profileSeedChanged();
     void avatarChanged();
     void activeTabChanged();
+    void homeSearchChanged();
     void contactsChanged();
     void toastChanged();
+    void editingProfileChanged();
+    void myProfileChanged();
+    void feedChanged();
+    void notificationsChanged();
 
     void postComposerChanged();
     void postMusicChanged();
@@ -197,8 +226,9 @@ signals:
 
 private:
     void postJson(const QString& path, const QJsonObject& body, bool authed,
-                  std::function<void(int, const QByteArray&)> callback);
-    void getJson(const QString& path, std::function<void(int, const QByteArray&)> callback);
+                  std::function<void(int, const QByteArray&)> callback, bool allowRefresh = true);
+    void getJson(const QString& path, std::function<void(int, const QByteArray&)> callback, bool allowRefresh = true);
+    void refreshSessionAndThen(std::function<void(bool)> done);
     void persistSession(const QJsonObject& obj);
     void restoreSession();
     void seedProfileFromEmail(const QString& email);
@@ -229,6 +259,7 @@ private:
     int authStep_ = 0; // 0 = Enter Email, 1 = Enter OTP
     QString email_;
     QString accessToken_;
+    QString refreshToken_;
     QString userId_;
     qint64 cooldownSeconds_ = 0;
     bool loading_ = false;
@@ -246,7 +277,8 @@ private:
     QString avatarFingerprintHash_;
     QJsonObject lastSessionObj_;
 
-    int activeTab_ = 0; // 0 = Chats, 1 = Contacts
+    int activeTab_ = 0; // 0 = Chats, 1 = Contacts, 2 = Feeds, 3 = Profile
+    QString homeSearchQuery_;
     QVariantList cachedContacts_;
     QVariantList filteredContacts_;
     QString contactFilter_ = QStringLiteral("all");
@@ -255,6 +287,11 @@ private:
     bool hasMoreContacts_ = false;
     QString contactsNextCursor_;
     QString toastMessage_;
+    bool isEditingProfile_ = false;
+    QVariantMap myProfile_;
+    QVariantList feedPosts_;
+    bool feedLoading_ = false;
+    QVariantList notifications_;
 
     bool postComposerOpen_ = false;
     QVariantList postMusicResults_;

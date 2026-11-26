@@ -161,9 +161,32 @@ CREATE POLICY post_media_read ON post_media
         )
     );
 
-CREATE POLICY post_media_write ON post_media
-    FOR ALL USING (author_id = telefam_current_user_id() OR telefam_is_admin_service())
-    WITH CHECK (author_id = telefam_current_user_id() OR telefam_is_admin_service());
+DROP POLICY IF EXISTS post_media_write ON post_media;
+CREATE POLICY post_media_insert ON post_media
+    FOR INSERT WITH CHECK (
+        (author_id = telefam_current_user_id() AND post_id IS NULL)
+        OR telefam_is_admin_service()
+    );
+
+CREATE POLICY post_media_update ON post_media
+    FOR UPDATE USING (author_id = telefam_current_user_id() OR telefam_is_admin_service())
+    WITH CHECK (
+        telefam_is_admin_service()
+        OR (
+            author_id = telefam_current_user_id()
+            AND (
+                post_id IS NULL
+                OR EXISTS (
+                    SELECT 1 FROM posts p
+                    WHERE p.id = post_media.post_id
+                      AND p.author_id = telefam_current_user_id()
+                )
+            )
+        )
+    );
+
+CREATE POLICY post_media_delete ON post_media
+    FOR DELETE USING (author_id = telefam_current_user_id() OR telefam_is_admin_service());
 
 CREATE POLICY media_frames_read ON media_frame_fingerprints
     FOR SELECT USING (
@@ -196,9 +219,29 @@ CREATE POLICY media_frames_write ON media_frame_fingerprints
 CREATE POLICY hashtags_read ON hashtags
     FOR SELECT USING (telefam_is_admin_service() OR telefam_current_user_id() IS NOT NULL);
 
-CREATE POLICY hashtags_write ON hashtags
-    FOR ALL USING (telefam_is_admin_service() OR telefam_current_user_id() IS NOT NULL)
-    WITH CHECK (telefam_is_admin_service() OR telefam_current_user_id() IS NOT NULL);
+DROP POLICY IF EXISTS hashtags_write ON hashtags;
+CREATE POLICY hashtags_admin_all ON hashtags
+    FOR ALL USING (telefam_is_admin_service())
+    WITH CHECK (telefam_is_admin_service());
+
+CREATE OR REPLACE FUNCTION telefam_bump_hashtag(p_tag VARCHAR) RETURNS VOID AS $$
+DECLARE
+    v_norm VARCHAR(80);
+BEGIN
+    IF telefam_current_user_id() IS NULL AND NOT telefam_is_admin_service() THEN
+        RAISE EXCEPTION 'unauthorized hashtag mutation';
+    END IF;
+    v_norm := LEFT(regexp_replace(lower(trim(leading '#' from trim(COALESCE(p_tag, '')))), '[^a-z0-9_]+', '', 'g'), 64);
+    IF length(v_norm) = 0 THEN
+        RETURN;
+    END IF;
+    INSERT INTO hashtags (tag_normalized, display_tag, post_count, updated_at)
+    VALUES (v_norm, v_norm, 1, NOW())
+    ON CONFLICT (tag_normalized) DO UPDATE SET
+        post_count = hashtags.post_count + 1,
+        updated_at = NOW();
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
 CREATE POLICY post_hashtags_read ON post_hashtags
     FOR SELECT USING (telefam_is_admin_service() OR telefam_current_user_id() IS NOT NULL);

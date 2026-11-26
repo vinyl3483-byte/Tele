@@ -278,6 +278,15 @@ func (s *Service) SetFollowState(
 			return err
 		}
 
+		if follow && outcome == "applied" {
+			if encMsg, eErr := security.EncryptAtRest(s.cfg.MasterKey, []byte("started following you"), "notifications.message"); eErr == nil {
+				_, _ = tx.Exec(ctx, `
+					INSERT INTO user_notifications (recipient_user_id, actor_user_id, kind, message_encrypted)
+					VALUES ($1, $2, 'follow', $3)
+				`, targetID, viewerID, encMsg)
+			}
+		}
+
 		if err := tx.QueryRow(ctx, `
 			SELECT
 				EXISTS(SELECT 1 FROM user_follows WHERE follower_id = $1 AND followee_id = $2),
@@ -298,6 +307,81 @@ func (s *Service) SetFollowState(
 		Relationship: ComputeRelationship(isFollowing, followsMe),
 		RiskScore:    scoreAfter,
 	}, http.StatusOK, nil
+}
+
+type NotificationDTO struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	ActorName string `json:"actor_name"`
+	Message   string `json:"message"`
+	IsRead    bool   `json:"is_read"`
+	CreatedAt int64  `json:"created_at"`
+}
+
+func (s *Service) ListNotifications(ctx context.Context, viewerID uuid.UUID) ([]NotificationDTO, int, error) {
+	out := make([]NotificationDTO, 0)
+	err := db.WithUserRLS(ctx, s.pool, viewerID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT n.id, n.kind, n.message_encrypted, n.is_read, n.created_at,
+			       COALESCE(up.full_name_encrypted, u.display_name_encrypted, ''::bytea)
+			FROM user_notifications n
+			LEFT JOIN users u ON u.id = n.actor_user_id
+			LEFT JOIN user_profiles up ON up.user_id = n.actor_user_id
+			WHERE n.recipient_user_id = $1
+			ORDER BY n.created_at DESC
+			LIMIT 50
+		`, viewerID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id uuid.UUID
+			var kind string
+			var encMsg, encActor []byte
+			var isRead bool
+			var created time.Time
+			if err := rows.Scan(&id, &kind, &encMsg, &isRead, &created, &encActor); err != nil {
+				return err
+			}
+			msg := ""
+			if b, err := security.DecryptAtRest(s.cfg.MasterKey, encMsg, "notifications.message"); err == nil {
+				msg = string(b)
+			}
+			actor := "Telefam"
+			if len(encActor) > 0 {
+				if b, err := security.DecryptAtRest(s.cfg.MasterKey, encActor, "profiles.full_name"); err == nil && len(b) > 0 {
+					actor = string(b)
+				} else if b, err := security.DecryptAtRest(s.cfg.MasterKey, encActor, "users.display_name"); err == nil && len(b) > 0 {
+					actor = string(b)
+				}
+			}
+			out = append(out, NotificationDTO{
+				ID:        id.String(),
+				Kind:      kind,
+				ActorName: actor,
+				Message:   msg,
+				IsRead:    isRead,
+				CreatedAt: created.UnixMilli(),
+			})
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	return out, http.StatusOK, nil
+}
+
+func (s *Service) MarkNotificationsRead(ctx context.Context, viewerID uuid.UUID) (int, error) {
+	err := db.WithUserRLS(ctx, s.pool, viewerID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE user_notifications SET is_read = TRUE WHERE recipient_user_id = $1 AND is_read = FALSE`, viewerID)
+		return err
+	})
+	if err != nil {
+		return http.StatusInternalServerError, err
+	}
+	return http.StatusOK, nil
 }
 
 func (s *Service) updateRiskScoreTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, isChurn, isRateLimited bool) int {

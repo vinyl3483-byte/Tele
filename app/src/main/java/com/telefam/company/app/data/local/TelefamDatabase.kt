@@ -77,6 +77,16 @@ data class QueuedPostEntity(
     val attemptCount: Int
 )
 
+@Entity(tableName = "cached_feed_videos")
+data class CachedFeedVideoEntity(
+    @PrimaryKey val cacheKey: String,
+    val feedTab: String,
+    val videoId: String,
+    val sortOrder: Int,
+    val payloadEncrypted: String,
+    val cachedAtMs: Long
+)
+
 @Dao
 interface TelefamDao {
     @Query("SELECT * FROM conversations ORDER BY updatedAtMs DESC")
@@ -168,6 +178,21 @@ interface TelefamDao {
 
     @Query("DELETE FROM queued_posts")
     suspend fun clearQueuedPosts()
+
+    @Query("SELECT * FROM cached_feed_videos WHERE feedTab = :feedTab ORDER BY sortOrder ASC")
+    suspend fun getCachedFeedVideos(feedTab: String): List<CachedFeedVideoEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertCachedFeedVideos(items: List<CachedFeedVideoEntity>)
+
+    @Query("DELETE FROM cached_feed_videos WHERE feedTab = :feedTab")
+    suspend fun clearCachedFeedVideosByTab(feedTab: String)
+
+    @Query("DELETE FROM cached_feed_videos WHERE videoId = :videoId")
+    suspend fun deleteCachedFeedVideo(videoId: String)
+
+    @Query("DELETE FROM cached_feed_videos")
+    suspend fun clearAllCachedFeedVideos()
 }
 
 @Database(
@@ -178,9 +203,10 @@ interface TelefamDao {
         CooldownEntity::class,
         EncryptedKvEntity::class,
         CachedContactEntity::class,
-        QueuedPostEntity::class
+        QueuedPostEntity::class,
+        CachedFeedVideoEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class TelefamDatabase : RoomDatabase() {
@@ -225,13 +251,31 @@ abstract class TelefamDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `cached_feed_videos` (
+                        `cacheKey` TEXT NOT NULL,
+                        `feedTab` TEXT NOT NULL,
+                        `videoId` TEXT NOT NULL,
+                        `sortOrder` INTEGER NOT NULL,
+                        `payloadEncrypted` TEXT NOT NULL,
+                        `cachedAtMs` INTEGER NOT NULL,
+                        PRIMARY KEY(`cacheKey`)
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun create(context: Context): TelefamDatabase {
             return Room.databaseBuilder(
                 context.applicationContext,
                 TelefamDatabase::class.java,
                 "telefam_encrypted.db"
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build()
         }
     }

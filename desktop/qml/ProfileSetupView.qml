@@ -12,7 +12,10 @@ Item {
     readonly property color subCol: telefam.isDarkTheme ? "#9CA3AF" : "#6B7280"
 
     focus: true
-    Keys.onEscapePressed: telefam.signOut()
+    Keys.onEscapePressed: {
+        if (telefam.isEditingProfile) telefam.closeEditProfile()
+        else telefam.signOut()
+    }
 
     property var countryList: [
         { iso: "KE", label: "🇰🇪 Kenya (+254)" },
@@ -71,7 +74,10 @@ Item {
                     sourceSize.height: 22
                     fillMode: Image.PreserveAspectFit
                 }
-                onClicked: telefam.signOut()
+                onClicked: {
+                    if (telefam.isEditingProfile) telefam.closeEditProfile()
+                    else telefam.signOut()
+                }
             }
 
             Column {
@@ -236,6 +242,7 @@ Item {
                                     id: phoneField
                                     Layout.fillWidth: true
                                     Layout.preferredHeight: 46
+                                    text: telefam.isEditingProfile && telefam.myProfile.phone_number ? telefam.myProfile.phone_number : ""
                                     placeholderText: "Enter your phone number"
                                     color: inkCol
                                 }
@@ -251,6 +258,11 @@ Item {
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 46
                                 model: ["Male", "Female", "Non-binary", "Prefer not to say"]
+                                currentIndex: {
+                                    if (!telefam.isEditingProfile || !telefam.myProfile.gender) return 0
+                                    var idx = genderKeys.indexOf(telefam.myProfile.gender)
+                                    return idx >= 0 ? idx : 0
+                                }
                             }
                         }
 
@@ -262,6 +274,7 @@ Item {
                                 id: dobField
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 46
+                                text: telefam.isEditingProfile && telefam.myProfile.date_of_birth ? telefam.myProfile.date_of_birth : ""
                                 placeholderText: "YYYY-MM-DD"
                                 color: inkCol
                             }
@@ -290,6 +303,7 @@ Item {
                             id: bioField
                             Layout.fillWidth: true
                             Layout.preferredHeight: 92
+                            text: telefam.isEditingProfile && telefam.myProfile.bio ? telefam.myProfile.bio : ""
                             placeholderText: "Tell us something about yourself..."
                             color: inkCol
                             wrapMode: Text.Wrap
@@ -336,7 +350,10 @@ Item {
                                 horizontalAlignment: Text.AlignHCenter
                                 verticalAlignment: Text.AlignVCenter
                             }
-                            onClicked: telefam.signOut()
+                            onClicked: {
+                                if (telefam.isEditingProfile) telefam.closeEditProfile()
+                                else telefam.signOut()
+                            }
                         }
 
                         Button {

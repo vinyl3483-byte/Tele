@@ -26,7 +26,11 @@ struct ProfileSetupView: View {
             ZStack {
                 HStack {
                     Button {
-                        viewModel.signOut()
+                        if viewModel.isEditingProfile {
+                            viewModel.closeEditProfile()
+                        } else {
+                            viewModel.signOut()
+                        }
                     } label: {
                         ArrowLeftVectorIcon()
                             .stroke(Color.white, style: StrokeStyle(lineWidth: 2.1, lineCap: .round, lineJoin: .round))
@@ -296,7 +300,13 @@ struct ProfileSetupView: View {
             .clipShape(RoundedRectangleShapeCompat(radius: 24))
         }
         .background(brandRed.ignoresSafeArea(edges: .top))
-        .telefamSwipeBack { viewModel.signOut() }
+        .telefamSwipeBack {
+            if viewModel.isEditingProfile {
+                viewModel.closeEditProfile()
+            } else {
+                viewModel.signOut()
+            }
+        }
         .onChange(of: selectedPhotoItem) { _, newItem in
             guard let newItem else { return }
             Task {

@@ -71,8 +71,10 @@ type UploadedVideoDTO struct {
 	RenamedFilename      string                        `json:"renamed_filename"`
 	ContentID            string                        `json:"content_id"`
 	ThumbnailObjectKey   string                        `json:"thumbnail_object_key"`
+	HLSMasterObjectKey   string                        `json:"hls_master_object_key"`
 	ThumbnailFingerprint string                        `json:"thumbnail_fingerprint"`
 	AudioFingerprintHash string                        `json:"audio_fingerprint_hash"`
+	Codec                string                        `json:"codec"`
 	Width                int                           `json:"width"`
 	Height               int                           `json:"height"`
 	DurationMs           int64                         `json:"duration_ms"`
@@ -100,6 +102,7 @@ type CreatePostRequest struct {
 
 type CreatePostResponse struct {
 	PostID                 string `json:"post_id"`
+	VideoID                string `json:"video_id,omitempty"`
 	PostType               string `json:"post_type"`
 	ContentFingerprintHash string `json:"content_fingerprint_hash"`
 	Status                 string `json:"status"`
@@ -428,8 +431,10 @@ func (s *Service) UploadAndSanitizeVideo(
 		RenamedFilename:      res.RenamedVideoFilename,
 		ContentID:            res.ContentID,
 		ThumbnailObjectKey:   res.ThumbnailObjectKey,
+		HLSMasterObjectKey:   res.HLSMasterObjectKey,
 		ThumbnailFingerprint: res.ThumbnailFingerprint,
 		AudioFingerprintHash: res.AudioFingerprintHash,
+		Codec:                res.Codec,
 		Width:                res.Width,
 		Height:               res.Height,
 		DurationMs:           res.DurationMs,
@@ -438,10 +443,29 @@ func (s *Service) UploadAndSanitizeVideo(
 	}, http.StatusOK, nil
 }
 
+func isAllowedSongPreviewURL(raw string) bool {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return true
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil || u.Scheme != "https" || u.User != nil {
+		return false
+	}
+	h := strings.ToLower(u.Hostname())
+	return strings.HasSuffix(h, ".mzstatic.com") ||
+		strings.HasSuffix(h, ".apple.com") ||
+		strings.HasSuffix(h, ".dzcdn.net") ||
+		strings.HasSuffix(h, ".deezer.com")
+}
+
 func (s *Service) CreatePost(ctx context.Context, authorID uuid.UUID, req CreatePostRequest) (*CreatePostResponse, int, error) {
 	postType := strings.ToLower(strings.TrimSpace(req.PostType))
 	if postType != "text" && postType != "photos" && postType != "video" {
 		return nil, http.StatusBadRequest, errors.New("invalid post_type")
+	}
+	if !isAllowedSongPreviewURL(req.SongPreviewURL) {
+		return nil, http.StatusBadRequest, errors.New("invalid song preview url")
 	}
 	body := strings.TrimSpace(req.Body)
 	if postType == "text" {
@@ -477,7 +501,7 @@ func (s *Service) CreatePost(ctx context.Context, authorID uuid.UUID, req Create
 				mute_original_audio, trim_start_ms, trim_end_ms, content_fingerprint_hash, status
 			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'ready')
 		`, postID, authorID, postType, encBody, req.BgColorHex, req.BgThemeID, req.FontFamily,
-			req.SongID, encSongTitle, encSongArtist, req.SongPreviewURL,
+			req.SongID, encSongTitle, encSongArtist, strings.TrimSpace(req.SongPreviewURL),
 			req.MuteOriginalAudio, req.TrimStartMs, req.TrimEndMs, contentFP)
 		if err != nil {
 			return err
@@ -503,13 +527,7 @@ func (s *Service) CreatePost(ctx context.Context, authorID uuid.UUID, req Create
 			if norm == "" {
 				continue
 			}
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO hashtags (tag_normalized, display_tag, post_count, updated_at)
-				VALUES ($1, $2, 1, NOW())
-				ON CONFLICT (tag_normalized) DO UPDATE SET
-					post_count = hashtags.post_count + 1,
-					updated_at = NOW()
-			`, norm, norm); err != nil {
+			if _, err := tx.Exec(ctx, `SELECT telefam_bump_hashtag($1)`, norm); err != nil {
 				return err
 			}
 			if _, err := tx.Exec(ctx, `
@@ -522,13 +540,140 @@ func (s *Service) CreatePost(ctx context.Context, authorID uuid.UUID, req Create
 
 		for _, rawUid := range req.TaggedUserIDs {
 			tUid, pErr := uuid.Parse(strings.TrimSpace(rawUid))
-			if pErr != nil {
+			if pErr != nil || tUid == authorID {
+				continue
+			}
+			var exists bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND is_suspended = FALSE)`, tUid).Scan(&exists); err != nil || !exists {
 				continue
 			}
 			_, _ = tx.Exec(ctx, `
 				INSERT INTO post_tags (post_id, tagged_user_id)
 				VALUES ($1, $2) ON CONFLICT DO NOTHING
 			`, postID, tUid)
+			if encMsg, eErr := security.EncryptAtRest(s.cfg.MasterKey, []byte("tagged you in a post"), "notifications.message"); eErr == nil {
+				_, _ = tx.Exec(ctx, `
+					INSERT INTO user_notifications (recipient_user_id, actor_user_id, kind, message_encrypted)
+					VALUES ($1, $2, 'tag', $3)
+				`, tUid, authorID, encMsg)
+			}
+		}
+
+		var createdVideoID uuid.UUID
+		if postType == "video" && len(req.MediaIDs) > 0 {
+			primaryMid, pErr := uuid.Parse(strings.TrimSpace(req.MediaIDs[0]))
+			if pErr == nil {
+				var origW, origH int
+				var durMs, fileSize int64
+				var primaryObjKey, thumbObjKey, qualitiesRaw string
+				qErr := tx.QueryRow(ctx, `
+					SELECT width, height, duration_ms, byte_size, stored_object_key, thumbnail_object_key, qualities_json::text
+					FROM post_media WHERE id = $1 AND author_id = $2
+				`, primaryMid, authorID).Scan(&origW, &origH, &durMs, &fileSize, &primaryObjKey, &thumbObjKey, &qualitiesRaw)
+				if qErr == nil && origW > 0 && origH > 0 {
+					var variants []media.VideoQualityRendition
+					_ = json.Unmarshal([]byte(qualitiesRaw), &variants)
+					hlsMaster := ""
+					if strings.HasPrefix(primaryObjKey, "videos/") && strings.HasSuffix(primaryObjKey, ".mp4") {
+						stem := strings.TrimSuffix(strings.TrimPrefix(primaryObjKey, "videos/"), ".mp4")
+						hlsMaster = "hls/" + stem + "/master.m3u8"
+					}
+
+					var audioID uuid.UUID
+					audioTitle := strings.TrimSpace(req.SongTitle)
+					audioArtist := strings.TrimSpace(req.SongArtist)
+					isOrig := audioTitle == ""
+					if audioTitle == "" {
+						audioTitle = "Original sound"
+					}
+					extTrack := strings.TrimSpace(req.SongID)
+					if extTrack == "" {
+						extTrack = "orig_" + postID.String()
+					}
+					encAudioTitle, _ := security.EncryptAtRest(s.cfg.MasterKey, []byte(audioTitle), "audios.title")
+					encAudioArtist, _ := security.EncryptAtRest(s.cfg.MasterKey, []byte(audioArtist), "audios.artist")
+					_ = tx.QueryRow(ctx, `
+						INSERT INTO audios (
+							external_track_id, creator_user_id, title_encrypted, artist_encrypted,
+							preview_url, duration_ms, is_original, usage_count
+						) VALUES ($1, $2, $3, $4, $5, $6, $7, 1)
+						ON CONFLICT (external_track_id) DO UPDATE SET
+							usage_count = audios.usage_count + 1,
+							updated_at = NOW()
+						RETURNING id
+					`, extTrack, authorID, encAudioTitle, encAudioArtist, strings.TrimSpace(req.SongPreviewURL), durMs, isOrig).Scan(&audioID)
+
+					aspectRatio := float64(origW) / float64(origH)
+					createdVideoID = uuid.New()
+					var audioPtr *uuid.UUID
+					if audioID != uuid.Nil {
+						audioPtr = &audioID
+					}
+					_, vErr := tx.Exec(ctx, `
+						INSERT INTO videos (
+							id, post_id, creator_id, audio_id, title_encrypted, description_encrypted,
+							original_width, original_height, aspect_ratio, duration_ms, codec, file_size,
+							thumbnail_object_key, hls_master_object_key, primary_object_key,
+							processing_status, visibility, content_fingerprint_hash
+						) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'h264', $11, $12, $13, $14, 'ready', 'public', $15)
+					`, createdVideoID, postID, authorID, audioPtr, encBody, encBody,
+						origW, origH, aspectRatio, durMs, fileSize,
+						thumbObjKey, hlsMaster, primaryObjKey, contentFP)
+					if vErr == nil {
+						_, _ = tx.Exec(ctx, `
+							INSERT INTO video_assets (video_id, media_id, asset_kind, object_key, mime_type, byte_size)
+							VALUES ($1, $2, 'original_sanitized', $3, 'video/mp4', $4)
+							ON CONFLICT DO NOTHING
+						`, createdVideoID, primaryMid, primaryObjKey, fileSize)
+						if thumbObjKey != "" {
+							_, _ = tx.Exec(ctx, `
+								INSERT INTO video_assets (video_id, media_id, asset_kind, object_key, mime_type)
+								VALUES ($1, $2, 'thumbnail', $3, 'image/jpeg')
+								ON CONFLICT DO NOTHING
+							`, createdVideoID, primaryMid, thumbObjKey)
+						}
+						if audioPtr != nil {
+							_, _ = tx.Exec(ctx, `
+								INSERT INTO audio_usage (audio_id, video_id)
+								VALUES ($1, $2) ON CONFLICT DO NOTHING
+							`, *audioPtr, createdVideoID)
+						}
+						for _, q := range variants {
+							if q.Label == "" || q.Width <= 0 || q.Height <= 0 {
+								continue
+							}
+							kbps := q.BitrateKbps
+							if kbps <= 0 {
+								kbps = 1200
+							}
+							plKey := q.HLSPlaylistKey
+							container := "mp4"
+							if plKey != "" {
+								container = "hls"
+							} else {
+								plKey = q.ObjectKey
+							}
+							_, _ = tx.Exec(ctx, `
+								INSERT INTO video_stream_variants (
+									video_id, quality_label, width, height, bitrate_kbps, codec, container,
+									playlist_object_key, mp4_object_key, byte_size
+								) VALUES ($1, $2, $3, $4, $5, 'h264', $6, $7, $8, $9)
+								ON CONFLICT DO NOTHING
+							`, createdVideoID, q.Label, q.Width, q.Height, kbps, container, plKey, q.ObjectKey, q.ByteSize)
+						}
+						for _, rawTag := range req.Hashtags {
+							norm := normalizeHashtag(rawTag)
+							if norm == "" {
+								continue
+							}
+							_, _ = tx.Exec(ctx, `
+								INSERT INTO video_hashtags (video_id, tag_normalized)
+								VALUES ($1, $2) ON CONFLICT DO NOTHING
+							`, createdVideoID, norm)
+						}
+					}
+				}
+			}
 		}
 
 		return nil
@@ -539,12 +684,119 @@ func (s *Service) CreatePost(ctx context.Context, authorID uuid.UUID, req Create
 
 	s.notifyErlangPostEvent(authorID, postID)
 
+	var vidStr string
+	if createdVideoID != uuid.Nil {
+		vidStr = createdVideoID.String()
+	}
+
 	return &CreatePostResponse{
 		PostID:                 postID.String(),
+		VideoID:                vidStr,
 		PostType:               postType,
 		ContentFingerprintHash: contentFP,
 		Status:                 "ready",
 	}, http.StatusCreated, nil
+}
+
+type FeedPostDTO struct {
+	PostID       string   `json:"post_id"`
+	AuthorID     string   `json:"author_id"`
+	AuthorName   string   `json:"author_name"`
+	AuthorHandle string   `json:"author_handle"`
+	PostType     string   `json:"post_type"`
+	Body         string   `json:"body"`
+	BgColorHex   string   `json:"bg_color_hex"`
+	BgThemeID    string   `json:"bg_theme_id"`
+	FontFamily   string   `json:"font_family"`
+	SongTitle    string   `json:"song_title"`
+	SongArtist   string   `json:"song_artist"`
+	MediaCount   int      `json:"media_count"`
+	Hashtags     []string `json:"hashtags"`
+	CreatedAt    int64    `json:"created_at"`
+}
+
+func (s *Service) ListFeedPosts(ctx context.Context, viewerID uuid.UUID, rawQuery string, limit int) ([]FeedPostDTO, int, error) {
+	if limit <= 0 || limit > 60 {
+		limit = 30
+	}
+	q := strings.ToLower(strings.TrimSpace(rawQuery))
+	out := make([]FeedPostDTO, 0)
+
+	err := db.WithUserRLS(ctx, s.pool, viewerID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT p.id, p.author_id, p.post_type, p.body_encrypted, p.bg_color_hex, p.bg_theme_id, p.font_family,
+			       COALESCE(p.song_title_encrypted, ''::bytea), COALESCE(p.song_artist_encrypted, ''::bytea),
+			       p.created_at,
+			       COALESCE(up.full_name_encrypted, u.display_name_encrypted),
+			       COALESCE(up.username_encrypted, ''::bytea),
+			       (SELECT COUNT(*) FROM post_media pm WHERE pm.post_id = p.id) AS media_count
+			FROM posts p
+			JOIN users u ON u.id = p.author_id
+			LEFT JOIN user_profiles up ON up.user_id = p.author_id
+			WHERE p.status = 'ready' AND u.is_suspended = FALSE
+			ORDER BY p.created_at DESC
+			LIMIT 120
+		`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var pid, aid uuid.UUID
+			var postType, bgColor, bgTheme, fontFam string
+			var encBody, encSongTitle, encSongArtist, encAuthorName, encAuthorUser []byte
+			var created time.Time
+			var mediaCount int
+			if err := rows.Scan(&pid, &aid, &postType, &encBody, &bgColor, &bgTheme, &fontFam,
+				&encSongTitle, &encSongArtist, &created, &encAuthorName, &encAuthorUser, &mediaCount); err != nil {
+				return err
+			}
+			bodyBytes, _ := security.DecryptAtRest(s.cfg.MasterKey, encBody, "posts.body")
+			songTBytes, _ := security.DecryptAtRest(s.cfg.MasterKey, encSongTitle, "posts.song_title")
+			songABytes, _ := security.DecryptAtRest(s.cfg.MasterKey, encSongArtist, "posts.song_artist")
+			nameBytes, nErr := security.DecryptAtRest(s.cfg.MasterKey, encAuthorName, "profiles.full_name")
+			if nErr != nil || len(nameBytes) == 0 {
+				nameBytes, _ = security.DecryptAtRest(s.cfg.MasterKey, encAuthorName, "users.display_name")
+			}
+			userBytes, _ := security.DecryptAtRest(s.cfg.MasterKey, encAuthorUser, "profiles.username")
+
+			bodyStr := string(bodyBytes)
+			authorName := string(nameBytes)
+			authorHandle := string(userBytes)
+			if q != "" {
+				if !strings.Contains(strings.ToLower(bodyStr), q) &&
+					!strings.Contains(strings.ToLower(authorName), q) &&
+					!strings.Contains(strings.ToLower(authorHandle), q) {
+					continue
+				}
+			}
+			out = append(out, FeedPostDTO{
+				PostID:       pid.String(),
+				AuthorID:     aid.String(),
+				AuthorName:   authorName,
+				AuthorHandle: authorHandle,
+				PostType:     postType,
+				Body:         bodyStr,
+				BgColorHex:   bgColor,
+				BgThemeID:    bgTheme,
+				FontFamily:   fontFam,
+				SongTitle:    string(songTBytes),
+				SongArtist:   string(songABytes),
+				MediaCount:   mediaCount,
+				Hashtags:     []string{},
+				CreatedAt:    created.UnixMilli(),
+			})
+			if len(out) >= limit {
+				break
+			}
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	return out, http.StatusOK, nil
 }
 
 // ============================================================================

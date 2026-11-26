@@ -40,6 +40,7 @@ type SetupRequest struct {
 
 type ProfileResponse struct {
 	UserID                string `json:"user_id"`
+	Email                 string `json:"email,omitempty"`
 	FullName              string `json:"full_name"`
 	Username              string `json:"username"`
 	CountryISO            string `json:"country_iso"`
@@ -130,6 +131,68 @@ func (s *Service) UploadAvatar(ctx context.Context, userID uuid.UUID, rawBytes [
 		return "", http.StatusInternalServerError, err
 	}
 	return sanitized.FingerprintHash, http.StatusOK, nil
+}
+
+func (s *Service) GetMyProfile(ctx context.Context, userID uuid.UUID) (*ProfileResponse, int, error) {
+	var resp ProfileResponse
+	resp.UserID = userID.String()
+
+	err := db.WithUserRLS(ctx, s.pool, userID, func(tx pgx.Tx) error {
+		var encEmail, encDisp []byte
+		if err := tx.QueryRow(ctx, `
+			SELECT email_encrypted, display_name_encrypted, profile_completed
+			FROM users WHERE id = $1
+		`, userID).Scan(&encEmail, &encDisp, &resp.ProfileCompleted); err != nil {
+			return err
+		}
+		if b, err := security.DecryptAtRest(s.cfg.MasterKey, encEmail, "users.email"); err == nil {
+			resp.Email = string(b)
+		}
+		if b, err := security.DecryptAtRest(s.cfg.MasterKey, encDisp, "users.display_name"); err == nil {
+			resp.FullName = string(b)
+		}
+
+		var encName, encUser, encPhone, encLoc, encBio []byte
+		var countryISO, gender, avatarFP string
+		var dob time.Time
+		pErr := tx.QueryRow(ctx, `
+			SELECT full_name_encrypted, username_encrypted, phone_e164_encrypted,
+			       country_iso, gender, date_of_birth, location_encrypted, bio_encrypted,
+			       COALESCE(avatar_fingerprint_hash, '')
+			FROM user_profiles WHERE user_id = $1
+		`, userID).Scan(&encName, &encUser, &encPhone, &countryISO, &gender, &dob, &encLoc, &encBio, &avatarFP)
+		if pErr == nil {
+			if b, err := security.DecryptAtRest(s.cfg.MasterKey, encName, "profiles.full_name"); err == nil {
+				resp.FullName = string(b)
+			}
+			if b, err := security.DecryptAtRest(s.cfg.MasterKey, encUser, "profiles.username"); err == nil {
+				resp.Username = string(b)
+			}
+			if b, err := security.DecryptAtRest(s.cfg.MasterKey, encPhone, "profiles.phone"); err == nil {
+				rawPhone := string(b)
+				if idx := strings.Index(rawPhone, ":"); idx >= 0 && idx+1 < len(rawPhone) {
+					resp.PhoneNumber = rawPhone[idx+1:]
+				} else {
+					resp.PhoneNumber = rawPhone
+				}
+			}
+			if b, err := security.DecryptAtRest(s.cfg.MasterKey, encLoc, "profiles.location"); err == nil {
+				resp.Location = string(b)
+			}
+			if b, err := security.DecryptAtRest(s.cfg.MasterKey, encBio, "profiles.bio"); err == nil {
+				resp.Bio = string(b)
+			}
+			resp.CountryISO = countryISO
+			resp.Gender = gender
+			resp.DateOfBirth = dob.Format("2006-01-02")
+			resp.AvatarFingerprintHash = avatarFP
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, http.StatusNotFound, err
+	}
+	return &resp, http.StatusOK, nil
 }
 
 func (s *Service) SetupProfile(ctx context.Context, userID uuid.UUID, req SetupRequest) (*ProfileResponse, int, error) {

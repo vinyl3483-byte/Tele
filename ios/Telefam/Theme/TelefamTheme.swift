@@ -540,3 +540,294 @@ struct ProfileVectorIcon: Shape {
         return p
     }
 }
+
+struct SyncVectorIcon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 24.0
+        let sy = rect.height / 24.0
+        var p = Path()
+        p.move(to: CGPoint(x: 20 * sx, y: 12 * sy))
+        p.addCurve(to: CGPoint(x: 6 * sx, y: 7.5 * sy), control1: CGPoint(x: 20 * sx, y: 7.5 * sy), control2: CGPoint(x: 13 * sx, y: 4.5 * sy))
+        p.move(to: CGPoint(x: 4 * sx, y: 12 * sy))
+        p.addCurve(to: CGPoint(x: 18 * sx, y: 16.5 * sy), control1: CGPoint(x: 4 * sx, y: 16.5 * sy), control2: CGPoint(x: 11 * sx, y: 19.5 * sy))
+        p.move(to: CGPoint(x: 17 * sx, y: 4 * sy))
+        p.addLine(to: CGPoint(x: 20 * sx, y: 7 * sy))
+        p.addLine(to: CGPoint(x: 17 * sx, y: 10 * sy))
+        p.move(to: CGPoint(x: 7 * sx, y: 14 * sy))
+        p.addLine(to: CGPoint(x: 4 * sx, y: 17 * sy))
+        p.addLine(to: CGPoint(x: 7 * sx, y: 20 * sy))
+        return p
+    }
+}
+
+struct SignOutVectorIcon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 24.0
+        let sy = rect.height / 24.0
+        var p = Path()
+        p.move(to: CGPoint(x: 9 * sx, y: 21 * sy))
+        p.addLine(to: CGPoint(x: 5 * sx, y: 21 * sy))
+        p.addCurve(to: CGPoint(x: 3 * sx, y: 19 * sy), control1: CGPoint(x: 3.9 * sx, y: 21 * sy), control2: CGPoint(x: 3 * sx, y: 20.1 * sy))
+        p.addLine(to: CGPoint(x: 3 * sx, y: 5 * sy))
+        p.addCurve(to: CGPoint(x: 5 * sx, y: 3 * sy), control1: CGPoint(x: 3 * sx, y: 3.9 * sy), control2: CGPoint(x: 3.9 * sx, y: 3 * sy))
+        p.addLine(to: CGPoint(x: 9 * sx, y: 3 * sy))
+        p.move(to: CGPoint(x: 16 * sx, y: 17 * sy))
+        p.addLine(to: CGPoint(x: 21 * sx, y: 12 * sy))
+        p.addLine(to: CGPoint(x: 16 * sx, y: 7 * sy))
+        p.move(to: CGPoint(x: 21 * sx, y: 12 * sy))
+        p.addLine(to: CGPoint(x: 9 * sx, y: 12 * sy))
+        return p
+    }
+}
+
+struct LiveTVVectorIcon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 24.0
+        let sy = rect.height / 24.0
+        var p = Path()
+        p.addRoundedRect(in: CGRect(x: 3 * sx, y: 7 * sy, width: 18 * sx, height: 14 * sy), cornerSize: CGSize(width: 3 * sx, height: 3 * sy))
+        p.move(to: CGPoint(x: 8 * sx, y: 3 * sy))
+        p.addLine(to: CGPoint(x: 12 * sx, y: 7 * sy))
+        p.addLine(to: CGPoint(x: 16 * sx, y: 3 * sy))
+        return p
+    }
+}
+
+struct HeartVectorIcon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 24.0
+        let sy = rect.height / 24.0
+        var p = Path()
+        p.move(to: CGPoint(x: 12 * sx, y: 20.4 * sy))
+        p.addCurve(
+            to: CGPoint(x: 2.5 * sx, y: 8.8 * sy),
+            control1: CGPoint(x: 6.8 * sx, y: 16.7 * sy),
+            control2: CGPoint(x: 2.5 * sx, y: 13.0 * sy)
+        )
+        p.addCurve(
+            to: CGPoint(x: 7.7 * sx, y: 3.6 * sy),
+            control1: CGPoint(x: 2.5 * sx, y: 5.8 * sy),
+            control2: CGPoint(x: 4.8 * sx, y: 3.6 * sy)
+        )
+        p.addCurve(
+            to: CGPoint(x: 12 * sx, y: 6.1 * sy),
+            control1: CGPoint(x: 9.6 * sx, y: 3.6 * sy),
+            control2: CGPoint(x: 11.2 * sx, y: 4.6 * sy)
+        )
+        p.addCurve(
+            to: CGPoint(x: 16.3 * sx, y: 3.6 * sy),
+            control1: CGPoint(x: 12.8 * sx, y: 4.6 * sy),
+            control2: CGPoint(x: 14.4 * sx, y: 3.6 * sy)
+        )
+        p.addCurve(
+            to: CGPoint(x: 21.5 * sx, y: 8.8 * sy),
+            control1: CGPoint(x: 19.2 * sx, y: 3.6 * sy),
+            control2: CGPoint(x: 21.5 * sx, y: 5.8 * sy)
+        )
+        p.addCurve(
+            to: CGPoint(x: 12 * sx, y: 20.4 * sy),
+            control1: CGPoint(x: 21.5 * sx, y: 13.0 * sy),
+            control2: CGPoint(x: 17.2 * sx, y: 16.7 * sy)
+        )
+        p.closeSubpath()
+        return p
+    }
+}
+
+struct FeedCommentBubbleVectorIcon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 24.0
+        let sy = rect.height / 24.0
+        var p = Path()
+        p.move(to: CGPoint(x: 12 * sx, y: 3 * sy))
+        p.addCurve(
+            to: CGPoint(x: 2.5 * sx, y: 11.4 * sy),
+            control1: CGPoint(x: 6.7 * sx, y: 3 * sy),
+            control2: CGPoint(x: 2.5 * sx, y: 6.8 * sy)
+        )
+        p.addCurve(
+            to: CGPoint(x: 5.2 * sx, y: 17.4 * sy),
+            control1: CGPoint(x: 2.5 * sx, y: 13.7 * sy),
+            control2: CGPoint(x: 3.5 * sx, y: 15.8 * sy)
+        )
+        p.addLine(to: CGPoint(x: 4.0 * sx, y: 21.2 * sy))
+        p.addLine(to: CGPoint(x: 8.2 * sx, y: 19.6 * sy))
+        p.addCurve(
+            to: CGPoint(x: 12 * sx, y: 19.9 * sy),
+            control1: CGPoint(x: 9.4 * sx, y: 19.8 * sy),
+            control2: CGPoint(x: 10.7 * sx, y: 19.9 * sy)
+        )
+        p.addCurve(
+            to: CGPoint(x: 21.5 * sx, y: 11.4 * sy),
+            control1: CGPoint(x: 17.3 * sx, y: 19.9 * sy),
+            control2: CGPoint(x: 21.5 * sx, y: 16.1 * sy)
+        )
+        p.addCurve(
+            to: CGPoint(x: 12 * sx, y: 3 * sy),
+            control1: CGPoint(x: 21.5 * sx, y: 6.8 * sy),
+            control2: CGPoint(x: 17.3 * sx, y: 3 * sy)
+        )
+        p.closeSubpath()
+        return p
+    }
+}
+
+struct FeedShareVectorIcon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 24.0
+        let sy = rect.height / 24.0
+        var p = Path()
+        p.move(to: CGPoint(x: 21.5 * sx, y: 3.2 * sy))
+        p.addLine(to: CGPoint(x: 2.8 * sx, y: 10.6 * sy))
+        p.addLine(to: CGPoint(x: 10.4 * sx, y: 13.8 * sy))
+        p.addLine(to: CGPoint(x: 13.6 * sx, y: 21.4 * sy))
+        p.closeSubpath()
+        p.move(to: CGPoint(x: 21.5 * sx, y: 3.2 * sy))
+        p.addLine(to: CGPoint(x: 10.4 * sx, y: 13.8 * sy))
+        return p
+    }
+}
+
+struct BookmarkVectorIcon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 24.0
+        let sy = rect.height / 24.0
+        var p = Path()
+        p.move(to: CGPoint(x: 6 * sx, y: 3 * sy))
+        p.addLine(to: CGPoint(x: 18 * sx, y: 3 * sy))
+        p.addCurve(to: CGPoint(x: 19 * sx, y: 4 * sy), control1: CGPoint(x: 18.6 * sx, y: 3 * sy), control2: CGPoint(x: 19 * sx, y: 3.4 * sy))
+        p.addLine(to: CGPoint(x: 19 * sx, y: 21 * sy))
+        p.addLine(to: CGPoint(x: 12 * sx, y: 16.5 * sy))
+        p.addLine(to: CGPoint(x: 5 * sx, y: 21 * sy))
+        p.addLine(to: CGPoint(x: 5 * sx, y: 4 * sy))
+        p.addCurve(to: CGPoint(x: 6 * sx, y: 3 * sy), control1: CGPoint(x: 5 * sx, y: 3.4 * sy), control2: CGPoint(x: 5.4 * sx, y: 3 * sy))
+        p.closeSubpath()
+        return p
+    }
+}
+
+struct MoreHorizVectorIcon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 24.0
+        let sy = rect.height / 24.0
+        var p = Path()
+        for cx in [5.5, 12.0, 18.5] {
+            p.addEllipse(in: CGRect(x: (cx - 1.8) * sx, y: 10.2 * sy, width: 3.6 * sx, height: 3.6 * sy))
+        }
+        return p
+    }
+}
+
+struct EqualizerVectorIcon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 24.0
+        let sy = rect.height / 24.0
+        var p = Path()
+        let bars: [(Double, Double, Double)] = [
+            (4.5, 9.0, 15.0),
+            (9.5, 5.0, 19.0),
+            (14.5, 8.0, 16.0),
+            (19.5, 11.0, 13.0)
+        ]
+        for (x, y1, y2) in bars {
+            p.move(to: CGPoint(x: x * sx, y: y1 * sy))
+            p.addLine(to: CGPoint(x: x * sx, y: y2 * sy))
+        }
+        return p
+    }
+}
+
+struct RepostVectorIcon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 24.0
+        let sy = rect.height / 24.0
+        var p = Path()
+        p.move(to: CGPoint(x: 17 * sx, y: 2 * sy))
+        p.addLine(to: CGPoint(x: 21 * sx, y: 6 * sy))
+        p.addLine(to: CGPoint(x: 17 * sx, y: 10 * sy))
+        p.move(to: CGPoint(x: 3 * sx, y: 11 * sy))
+        p.addLine(to: CGPoint(x: 3 * sx, y: 9 * sy))
+        p.addCurve(to: CGPoint(x: 7 * sx, y: 6 * sy), control1: CGPoint(x: 3 * sx, y: 7.3 * sy), control2: CGPoint(x: 4.8 * sx, y: 6 * sy))
+        p.addLine(to: CGPoint(x: 21 * sx, y: 6 * sy))
+        p.move(to: CGPoint(x: 7 * sx, y: 22 * sy))
+        p.addLine(to: CGPoint(x: 3 * sx, y: 18 * sy))
+        p.addLine(to: CGPoint(x: 7 * sx, y: 14 * sy))
+        p.move(to: CGPoint(x: 21 * sx, y: 13 * sy))
+        p.addLine(to: CGPoint(x: 21 * sx, y: 15 * sy))
+        p.addCurve(to: CGPoint(x: 17 * sx, y: 18 * sy), control1: CGPoint(x: 21 * sx, y: 16.7 * sy), control2: CGPoint(x: 19.2 * sx, y: 18 * sy))
+        p.addLine(to: CGPoint(x: 3 * sx, y: 18 * sy))
+        return p
+    }
+}
+
+struct BlockCircleVectorIcon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 24.0
+        let sy = rect.height / 24.0
+        var p = Path()
+        p.addEllipse(in: CGRect(x: 3 * sx, y: 3 * sy, width: 18 * sx, height: 18 * sy))
+        p.move(to: CGPoint(x: 5.7 * sx, y: 5.7 * sy))
+        p.addLine(to: CGPoint(x: 18.3 * sx, y: 18.3 * sy))
+        return p
+    }
+}
+
+struct FlagReportVectorIcon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 24.0
+        let sy = rect.height / 24.0
+        var p = Path()
+        p.move(to: CGPoint(x: 5 * sx, y: 21 * sy))
+        p.addLine(to: CGPoint(x: 5 * sx, y: 4 * sy))
+        p.addLine(to: CGPoint(x: 19 * sx, y: 4 * sy))
+        p.addLine(to: CGPoint(x: 16 * sx, y: 9 * sy))
+        p.addLine(to: CGPoint(x: 19 * sx, y: 14 * sy))
+        p.addLine(to: CGPoint(x: 5 * sx, y: 14 * sy))
+        return p
+    }
+}
+
+struct LockVectorIcon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 24.0
+        let sy = rect.height / 24.0
+        var p = Path()
+        p.addRoundedRect(in: CGRect(x: 4 * sx, y: 11 * sy, width: 16 * sx, height: 10 * sy), cornerSize: CGSize(width: 2 * sx, height: 2 * sy))
+        p.move(to: CGPoint(x: 8 * sx, y: 11 * sy))
+        p.addLine(to: CGPoint(x: 8 * sx, y: 7 * sy))
+        p.addCurve(to: CGPoint(x: 16 * sx, y: 7 * sy), control1: CGPoint(x: 8 * sx, y: 4.5 * sy), control2: CGPoint(x: 16 * sx, y: 4.5 * sy))
+        p.addLine(to: CGPoint(x: 16 * sx, y: 11 * sy))
+        return p
+    }
+}
+
+struct EditPencilVectorIcon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 24.0
+        let sy = rect.height / 24.0
+        var p = Path()
+        p.move(to: CGPoint(x: 4 * sx, y: 20 * sy))
+        p.addLine(to: CGPoint(x: 8 * sx, y: 19 * sy))
+        p.addLine(to: CGPoint(x: 19 * sx, y: 8 * sy))
+        p.addLine(to: CGPoint(x: 16 * sx, y: 5 * sy))
+        p.addLine(to: CGPoint(x: 5 * sx, y: 16 * sy))
+        p.closeSubpath()
+        return p
+    }
+}
+
+struct VisibilityEyeVectorIcon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 24.0
+        let sy = rect.height / 24.0
+        var p = Path()
+        p.move(to: CGPoint(x: 2 * sx, y: 12 * sy))
+        p.addCurve(to: CGPoint(x: 22 * sx, y: 12 * sy), control1: CGPoint(x: 6 * sx, y: 5 * sy), control2: CGPoint(x: 18 * sx, y: 5 * sy))
+        p.addCurve(to: CGPoint(x: 2 * sx, y: 12 * sy), control1: CGPoint(x: 18 * sx, y: 19 * sy), control2: CGPoint(x: 6 * sx, y: 19 * sy))
+        p.closeSubpath()
+        p.addEllipse(in: CGRect(x: 9.5 * sx, y: 9.5 * sy, width: 5 * sx, height: 5 * sy))
+        return p
+    }
+}
+
+

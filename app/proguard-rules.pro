@@ -37,8 +37,12 @@
     @com.squareup.moshi.Json <fields>;
 }
 
-# OkHttp & Credential Manager
+# OkHttp, Credential Manager, Media3 & Coil
 -dontwarn okhttp3.**
 -dontwarn okio.**
 -keep class androidx.credentials.** { *; }
 -keep class com.google.android.libraries.identity.googleid.** { *; }
+-keep class androidx.media3.exoplayer.** { *; }
+-keep class androidx.media3.datasource.** { *; }
+-dontwarn androidx.media3.**
+-dontwarn coil.**

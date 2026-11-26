@@ -9,7 +9,7 @@ struct TelefamApp: App {
         WindowGroup {
             Group {
                 if let session = viewModel.session {
-                    if !session.profile_completed {
+                    if !session.profile_completed || viewModel.isEditingProfile {
                         ProfileSetupView(viewModel: viewModel, network: network)
                     } else {
                         WorkspaceView(viewModel: viewModel, network: network)

@@ -37,13 +37,18 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -64,6 +69,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -72,22 +78,37 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
 import com.telefam.company.app.R
 import com.telefam.company.app.data.ContactModel
 import com.telefam.company.app.data.ConversationModel
 import com.telefam.company.app.data.MessageModel
+import com.telefam.company.app.feed.FeedFormatter
+import com.telefam.company.app.feed.FeedPlaybackState
 import com.telefam.company.app.network.AuthSessionDto
+import com.telefam.company.app.network.MyProfileDto
+import com.telefam.company.app.network.NotificationDto
+import com.telefam.company.app.network.TelefamNetworkClient
 import com.telefam.company.app.ui.ContactFilter
+import com.telefam.company.app.ui.FeedController
 import com.telefam.company.app.ui.HomeTab
+import com.telefam.company.app.ui.VideoFeedUiState
 import com.telefam.company.app.ui.components.swipeBackEdge
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.launch
 
 @Composable
 fun WorkspaceScreen(
     session: AuthSessionDto,
     isDarkTheme: Boolean,
     activeTab: HomeTab,
+    homeSearchQuery: String,
     conversations: List<ConversationModel>,
     selectedConversationId: String?,
     messages: List<MessageModel>,
@@ -97,6 +118,12 @@ fun WorkspaceScreen(
     isLoadingContacts: Boolean,
     hasMoreContacts: Boolean,
     contactsToastMessage: String?,
+    myProfile: MyProfileDto?,
+    videoFeedState: VideoFeedUiState,
+    feedPlaybackState: FeedPlaybackState,
+    feedController: FeedController,
+    notifications: List<NotificationDto>,
+    onHomeSearchQueryChange: (String) -> Unit,
     onToggleTheme: () -> Unit,
     onSelectTab: (HomeTab) -> Unit,
     onSelectConversation: (String?) -> Unit,
@@ -108,20 +135,18 @@ fun WorkspaceScreen(
     onToggleFollow: (ContactModel) -> Unit,
     onLoadMoreContacts: () -> Unit,
     onClearContactsToast: () -> Unit,
-    onOpenPost: () -> Unit
+    onOpenPost: () -> Unit,
+    onOpenNotifications: () -> Unit,
+    onMarkNotificationsRead: () -> Unit,
+    onSyncNow: () -> Unit,
+    onEditProfile: () -> Unit,
+    onSignOut: () -> Unit
 ) {
     var showNewChatDialog by remember { mutableStateOf(false) }
+    var showNotificationsDialog by remember { mutableStateOf(false) }
+    var showMoreMenu by remember { mutableStateOf(false) }
     var isBottomBarVisible by remember { mutableStateOf(true) }
     val snackbarHostState = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
-    val comingSoonLabel = stringResource(id = R.string.coming_soon)
-
-    fun showComingSoon() {
-        scope.launch {
-            snackbarHostState.currentSnackbarData?.dismiss()
-            snackbarHostState.showSnackbar(comingSoonLabel)
-        }
-    }
 
     LaunchedEffect(activeTab) {
         isBottomBarVisible = true
@@ -135,42 +160,73 @@ fun WorkspaceScreen(
         }
     }
 
+    val filteredConversations = remember(conversations, homeSearchQuery) {
+        val q = homeSearchQuery.trim().lowercase()
+        if (q.isEmpty()) conversations else conversations.filter { it.title.lowercase().contains(q) }
+    }
+
+    val unreadCount = remember(notifications) { notifications.count { !it.isRead } }
+
     val selectedConversation = remember(conversations, selectedConversationId) {
         conversations.firstOrNull { it.id == selectedConversationId }
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.primary)
-            .windowInsetsPadding(WindowInsets.statusBars)
-            .windowInsetsPadding(WindowInsets.navigationBars)
-    ) {
+    val isImmersiveFeed = activeTab == HomeTab.FEEDS
+    val rootModifier = Modifier
+        .fillMaxSize()
+        .background(if (isImmersiveFeed) Color.Black else MaterialTheme.colorScheme.primary)
+        .let { m -> if (isImmersiveFeed) m else m.windowInsetsPadding(WindowInsets.statusBars) }
+        .windowInsetsPadding(WindowInsets.navigationBars)
+
+    Box(modifier = rootModifier) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val isWide = maxWidth >= 600.dp
 
             Box(modifier = Modifier.fillMaxSize()) {
                 Column(modifier = Modifier.fillMaxSize()) {
-                    if (activeTab == HomeTab.CONTACTS) {
-                        ContactsTopBar(
-                            isDarkTheme = isDarkTheme,
-                            searchQuery = contactSearchQuery,
-                            activeFilter = contactFilter,
-                            onSearchQueryChange = onContactSearchQueryChange,
-                            onSelectFilter = onSelectContactFilter,
-                            onToggleTheme = onToggleTheme
-                        )
-                    } else {
-                        HomeTopBar(
-                            isDarkTheme = isDarkTheme,
-                            onSearchClick = ::showComingSoon,
-                            onToggleTheme = onToggleTheme,
-                            onNotificationsClick = ::showComingSoon,
-                            onMoreClick = ::showComingSoon
-                        )
+                    when (activeTab) {
+                        HomeTab.FEEDS -> Unit
+                        HomeTab.CONTACTS -> {
+                            ContactsTopBar(
+                                isDarkTheme = isDarkTheme,
+                                searchQuery = contactSearchQuery,
+                                activeFilter = contactFilter,
+                                onSearchQueryChange = onContactSearchQueryChange,
+                                onSelectFilter = onSelectContactFilter,
+                                onToggleTheme = onToggleTheme
+                            )
+                        }
+                        else -> {
+                            HomeTopBar(
+                                isDarkTheme = isDarkTheme,
+                                searchQuery = homeSearchQuery,
+                                unreadCount = unreadCount,
+                                showMoreMenu = showMoreMenu,
+                                onSearchQueryChange = onHomeSearchQueryChange,
+                                onToggleTheme = onToggleTheme,
+                                onNotificationsClick = {
+                                    onOpenNotifications()
+                                    showNotificationsDialog = true
+                                },
+                                onMoreClick = { showMoreMenu = true },
+                                onDismissMoreMenu = { showMoreMenu = false },
+                                onSyncClick = {
+                                    showMoreMenu = false
+                                    onSyncNow()
+                                },
+                                onEditProfileClick = {
+                                    showMoreMenu = false
+                                    onEditProfile()
+                                },
+                                onSignOutClick = {
+                                    showMoreMenu = false
+                                    onSignOut()
+                                }
+                            )
+                        }
                     }
 
-                    val bodyShape = if (activeTab == HomeTab.CONTACTS) {
+                    val bodyShape = if (activeTab == HomeTab.CONTACTS || isImmersiveFeed) {
                         RoundedCornerShape(0.dp)
                     } else {
                         RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
@@ -181,35 +237,135 @@ fun WorkspaceScreen(
                             .weight(1f)
                             .fillMaxWidth()
                             .clip(bodyShape)
-                            .background(MaterialTheme.colorScheme.background)
+                            .background(if (isImmersiveFeed) Color.Black else MaterialTheme.colorScheme.background)
                     ) {
                         if (isWide) {
                             Row(modifier = Modifier.fillMaxSize()) {
                                 HomeNavigationRail(
-                                    isDarkTheme = isDarkTheme,
+                                    isDarkTheme = isDarkTheme || isImmersiveFeed,
                                     activeTab = activeTab,
                                     onChatsClick = {
                                         onSelectTab(HomeTab.CHATS)
                                         onSelectConversation(null)
                                     },
-                                    onContactsClick = {
-                                        onSelectTab(HomeTab.CONTACTS)
-                                    },
+                                    onContactsClick = { onSelectTab(HomeTab.CONTACTS) },
                                     onOpenPost = onOpenPost,
-                                    onComingSoon = ::showComingSoon
+                                    onFeedsClick = { onSelectTab(HomeTab.FEEDS) },
+                                    onProfileClick = { onSelectTab(HomeTab.PROFILE) }
                                 )
                                 HorizontalDivider(
                                     modifier = Modifier
                                         .width(1.dp)
                                         .fillMaxHeight(),
-                                    color = MaterialTheme.colorScheme.outlineVariant
+                                    color = if (isImmersiveFeed) Color(0xFF1F222A) else MaterialTheme.colorScheme.outlineVariant
                                 )
-                                if (activeTab == HomeTab.CONTACTS) {
+                                when (activeTab) {
+                                    HomeTab.CONTACTS -> {
+                                        BackHandler { onSelectTab(HomeTab.CHATS) }
+                                        ContactsScreenContent(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .fillMaxHeight(),
+                                            isDarkTheme = isDarkTheme,
+                                            contacts = contacts,
+                                            activeFilter = contactFilter,
+                                            isLoading = isLoadingContacts,
+                                            hasMore = hasMoreContacts,
+                                            onToggleFollow = onToggleFollow,
+                                            onLoadMore = onLoadMoreContacts,
+                                            onBottomBarVisibilityChange = { isBottomBarVisible = it }
+                                        )
+                                    }
+
+                                    HomeTab.FEEDS -> {
+                                        BackHandler { onSelectTab(HomeTab.CHATS) }
+                                        FeedScreen(
+                                            feedState = videoFeedState,
+                                            playbackState = feedPlaybackState,
+                                            feedController = feedController,
+                                            bottomOverlayPadding = 8.dp,
+                                            isActiveTab = true,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .fillMaxHeight()
+                                        )
+                                    }
+
+                                    HomeTab.PROFILE -> {
+                                        BackHandler { onSelectTab(HomeTab.CHATS) }
+                                        ProfileOverviewContent(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .fillMaxHeight(),
+                                            session = session,
+                                            profile = myProfile,
+                                            feedState = videoFeedState,
+                                            feedController = feedController,
+                                            onEditProfile = onEditProfile,
+                                            onSyncNow = onSyncNow,
+                                            onSignOut = onSignOut
+                                        )
+                                    }
+
+                                    HomeTab.CHATS -> {
+                                        if (filteredConversations.isEmpty()) {
+                                            EmptyHomeConversations(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .fillMaxHeight(),
+                                                onStartChat = { showNewChatDialog = true }
+                                            )
+                                        } else {
+                                            ConversationListPane(
+                                                modifier = Modifier
+                                                    .width(320.dp)
+                                                    .fillMaxHeight(),
+                                                conversations = filteredConversations,
+                                                selectedId = selectedConversationId,
+                                                onSelectConversation = { onSelectConversation(it) },
+                                                onNewChatClick = { showNewChatDialog = true },
+                                                onBottomBarVisibilityChange = { isBottomBarVisible = it }
+                                            )
+                                            HorizontalDivider(
+                                                modifier = Modifier
+                                                    .width(1.dp)
+                                                    .fillMaxHeight(),
+                                                color = MaterialTheme.colorScheme.outlineVariant
+                                            )
+                                            Box(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .fillMaxHeight()
+                                            ) {
+                                                if (selectedConversation != null) {
+                                                    ChatThreadPane(
+                                                        conversation = selectedConversation,
+                                                        currentUserId = session.userId,
+                                                        messages = messages,
+                                                        showBackButton = false,
+                                                        onBack = { onSelectConversation(null) },
+                                                        onSendMessage = onSendMessage,
+                                                        onDeleteMessage = onDeleteMessage
+                                                    )
+                                                } else {
+                                                    EmptyHomeConversations(
+                                                        modifier = Modifier.fillMaxSize(),
+                                                        onStartChat = { showNewChatDialog = true }
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            when (activeTab) {
+                                HomeTab.CONTACTS -> {
                                     BackHandler { onSelectTab(HomeTab.CHATS) }
                                     ContactsScreenContent(
                                         modifier = Modifier
-                                            .weight(1f)
-                                            .fillMaxHeight(),
+                                            .fillMaxSize()
+                                            .swipeBackEdge { onSelectTab(HomeTab.CHATS) },
                                         isDarkTheme = isDarkTheme,
                                         contacts = contacts,
                                         activeFilter = contactFilter,
@@ -219,102 +375,71 @@ fun WorkspaceScreen(
                                         onLoadMore = onLoadMoreContacts,
                                         onBottomBarVisibilityChange = { isBottomBarVisible = it }
                                     )
-                                } else if (conversations.isEmpty()) {
-                                    EmptyHomeConversations(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .fillMaxHeight(),
-                                        onStartChat = { showNewChatDialog = true }
+                                }
+
+                                HomeTab.FEEDS -> {
+                                    BackHandler { onSelectTab(HomeTab.CHATS) }
+                                    FeedScreen(
+                                        feedState = videoFeedState,
+                                        playbackState = feedPlaybackState,
+                                        feedController = feedController,
+                                        bottomOverlayPadding = 66.dp,
+                                        isActiveTab = true,
+                                        modifier = Modifier.fillMaxSize()
                                     )
-                                } else {
-                                    ConversationListPane(
+                                }
+
+                                HomeTab.PROFILE -> {
+                                    BackHandler { onSelectTab(HomeTab.CHATS) }
+                                    ProfileOverviewContent(
                                         modifier = Modifier
-                                            .width(320.dp)
-                                            .fillMaxHeight(),
-                                        conversations = conversations,
-                                        selectedId = selectedConversationId,
-                                        onSelectConversation = { onSelectConversation(it) },
-                                        onNewChatClick = { showNewChatDialog = true },
-                                        onBottomBarVisibilityChange = { isBottomBarVisible = it }
+                                            .fillMaxSize()
+                                            .swipeBackEdge { onSelectTab(HomeTab.CHATS) },
+                                        session = session,
+                                        profile = myProfile,
+                                        feedState = videoFeedState,
+                                        feedController = feedController,
+                                        onEditProfile = onEditProfile,
+                                        onSyncNow = onSyncNow,
+                                        onSignOut = onSignOut
                                     )
-                                    HorizontalDivider(
-                                        modifier = Modifier
-                                            .width(1.dp)
-                                            .fillMaxHeight(),
-                                        color = MaterialTheme.colorScheme.outlineVariant
-                                    )
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .fillMaxHeight()
-                                    ) {
-                                        if (selectedConversation != null) {
-                                            ChatThreadPane(
-                                                conversation = selectedConversation,
-                                                currentUserId = session.userId,
-                                                messages = messages,
-                                                showBackButton = false,
-                                                onBack = { onSelectConversation(null) },
-                                                onSendMessage = onSendMessage,
-                                                onDeleteMessage = onDeleteMessage
-                                            )
-                                        } else {
-                                            EmptyHomeConversations(
-                                                modifier = Modifier.fillMaxSize(),
-                                                onStartChat = { showNewChatDialog = true }
-                                            )
-                                        }
+                                }
+
+                                HomeTab.CHATS -> {
+                                    if (selectedConversation != null) {
+                                        BackHandler { onSelectConversation(null) }
+                                        ChatThreadPane(
+                                            conversation = selectedConversation,
+                                            currentUserId = session.userId,
+                                            messages = messages,
+                                            showBackButton = true,
+                                            onBack = { onSelectConversation(null) },
+                                            onSendMessage = onSendMessage,
+                                            onDeleteMessage = onDeleteMessage
+                                        )
+                                    } else if (filteredConversations.isEmpty()) {
+                                        EmptyHomeConversations(
+                                            modifier = Modifier.fillMaxSize(),
+                                            onStartChat = { showNewChatDialog = true }
+                                        )
+                                    } else {
+                                        ConversationListPane(
+                                            modifier = Modifier.fillMaxSize(),
+                                            conversations = filteredConversations,
+                                            selectedId = selectedConversationId,
+                                            onSelectConversation = { onSelectConversation(it) },
+                                            onNewChatClick = { showNewChatDialog = true },
+                                            onBottomBarVisibilityChange = { isBottomBarVisible = it }
+                                        )
                                     }
                                 }
-                            }
-                        } else {
-                            if (activeTab == HomeTab.CONTACTS) {
-                                BackHandler { onSelectTab(HomeTab.CHATS) }
-                                ContactsScreenContent(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .swipeBackEdge { onSelectTab(HomeTab.CHATS) },
-                                    isDarkTheme = isDarkTheme,
-                                    contacts = contacts,
-                                    activeFilter = contactFilter,
-                                    isLoading = isLoadingContacts,
-                                    hasMore = hasMoreContacts,
-                                    onToggleFollow = onToggleFollow,
-                                    onLoadMore = onLoadMoreContacts,
-                                    onBottomBarVisibilityChange = { isBottomBarVisible = it }
-                                )
-                            } else if (selectedConversation != null) {
-                                BackHandler { onSelectConversation(null) }
-                                ChatThreadPane(
-                                    conversation = selectedConversation,
-                                    currentUserId = session.userId,
-                                    messages = messages,
-                                    showBackButton = true,
-                                    onBack = { onSelectConversation(null) },
-                                    onSendMessage = onSendMessage,
-                                    onDeleteMessage = onDeleteMessage
-                                )
-                            } else if (conversations.isEmpty()) {
-                                EmptyHomeConversations(
-                                    modifier = Modifier.fillMaxSize(),
-                                    onStartChat = { showNewChatDialog = true }
-                                )
-                            } else {
-                                ConversationListPane(
-                                    modifier = Modifier.fillMaxSize(),
-                                    conversations = conversations,
-                                    selectedId = selectedConversationId,
-                                    onSelectConversation = { onSelectConversation(it) },
-                                    onNewChatClick = { showNewChatDialog = true },
-                                    onBottomBarVisibilityChange = { isBottomBarVisible = it }
-                                )
                             }
                         }
                     }
                 }
 
                 val shouldShowBottomNav = !isWide &&
-                    (activeTab == HomeTab.CONTACTS || selectedConversation == null) &&
+                    (activeTab != HomeTab.CHATS || selectedConversation == null) &&
                     isBottomBarVisible
 
                 AnimatedVisibility(
@@ -324,12 +449,13 @@ fun WorkspaceScreen(
                     modifier = Modifier.align(Alignment.BottomCenter)
                 ) {
                     HomeBottomNavBar(
-                        isDarkTheme = isDarkTheme,
+                        isDarkTheme = isDarkTheme || isImmersiveFeed,
                         activeTab = activeTab,
                         onChatsClick = { onSelectTab(HomeTab.CHATS) },
                         onContactsClick = { onSelectTab(HomeTab.CONTACTS) },
                         onOpenPost = onOpenPost,
-                        onComingSoon = ::showComingSoon
+                        onFeedsClick = { onSelectTab(HomeTab.FEEDS) },
+                        onProfileClick = { onSelectTab(HomeTab.PROFILE) }
                     )
                 }
             }
@@ -380,15 +506,86 @@ fun WorkspaceScreen(
             }
         )
     }
+
+    if (showNotificationsDialog) {
+        AlertDialog(
+            onDismissRequest = { showNotificationsDialog = false },
+            title = { Text(stringResource(id = R.string.notifications_title)) },
+            text = {
+                if (notifications.isEmpty()) {
+                    Text(
+                        text = stringResource(id = R.string.notifications_empty),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 320.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(notifications, key = { it.id }) { item ->
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (item.isRead) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                else MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp)
+                                ) {
+                                    Text(
+                                        text = item.actorName.ifBlank { "Telefam" },
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = item.message,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                if (unreadCount > 0) {
+                    TextButton(onClick = {
+                        onMarkNotificationsRead()
+                        showNotificationsDialog = false
+                    }) {
+                        Text(stringResource(id = R.string.notifications_mark_read))
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showNotificationsDialog = false }) {
+                    Text(stringResource(id = R.string.post_done))
+                }
+            }
+        )
+    }
 }
 
 @Composable
 private fun HomeTopBar(
     isDarkTheme: Boolean,
-    onSearchClick: () -> Unit,
+    searchQuery: String,
+    unreadCount: Int,
+    showMoreMenu: Boolean,
+    onSearchQueryChange: (String) -> Unit,
     onToggleTheme: () -> Unit,
     onNotificationsClick: () -> Unit,
-    onMoreClick: () -> Unit
+    onMoreClick: () -> Unit,
+    onDismissMoreMenu: () -> Unit,
+    onSyncClick: () -> Unit,
+    onEditProfileClick: () -> Unit,
+    onSignOutClick: () -> Unit
 ) {
     val pillBg = if (isDarkTheme) Color(0xFF1E1F24) else Color(0xFFA60B0B)
     Row(
@@ -405,9 +602,7 @@ private fun HomeTopBar(
                 .clip(RoundedCornerShape(23.dp))
                 .background(pillBg)
                 .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(23.dp))
-                .clickable(onClick = onSearchClick)
-                .padding(horizontal = 14.dp)
-                .testTag("home_search_button"),
+                .padding(horizontal = 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Image(
@@ -417,13 +612,39 @@ private fun HomeTopBar(
                 modifier = Modifier.size(18.dp)
             )
             Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = stringResource(id = R.string.home_search_hint),
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color.White.copy(alpha = 0.75f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            Box(
+                modifier = Modifier.weight(1f),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                if (searchQuery.isEmpty()) {
+                    Text(
+                        text = stringResource(id = R.string.home_search_hint),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White.copy(alpha = 0.75f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                BasicTextField(
+                    value = searchQuery,
+                    onValueChange = onSearchQueryChange,
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = Color.White),
+                    cursorBrush = SolidColor(Color.White),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("home_search_input")
+                )
+            }
+            if (searchQuery.isNotEmpty()) {
+                Image(
+                    painter = painterResource(id = R.drawable.ic_close_white),
+                    contentDescription = "Clear",
+                    modifier = Modifier
+                        .size(16.dp)
+                        .clickable { onSearchQueryChange("") }
+                )
+            }
         }
 
         Box(
@@ -458,30 +679,84 @@ private fun HomeTopBar(
             }
         }
 
-        IconButton(
-            onClick = onNotificationsClick,
-            modifier = Modifier
-                .size(48.dp)
-                .testTag("notifications_button")
-        ) {
-            Image(
-                painter = painterResource(id = R.drawable.ic_bell),
-                contentDescription = "Notifications",
-                modifier = Modifier.size(22.dp)
-            )
+        Box(contentAlignment = Alignment.TopEnd) {
+            IconButton(
+                onClick = onNotificationsClick,
+                modifier = Modifier
+                    .size(48.dp)
+                    .testTag("notifications_button")
+            ) {
+                Image(
+                    painter = painterResource(id = R.drawable.ic_bell),
+                    contentDescription = "Notifications",
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            if (unreadCount > 0) {
+                Box(
+                    modifier = Modifier
+                        .padding(top = 10.dp, end = 10.dp)
+                        .size(9.dp)
+                        .clip(CircleShape)
+                        .background(Color.White)
+                )
+            }
         }
 
-        IconButton(
-            onClick = onMoreClick,
-            modifier = Modifier
-                .size(48.dp)
-                .testTag("more_options_button")
-        ) {
-            Image(
-                painter = painterResource(id = R.drawable.ic_more_vert),
-                contentDescription = "More options",
-                modifier = Modifier.size(22.dp)
-            )
+        Box {
+            IconButton(
+                onClick = onMoreClick,
+                modifier = Modifier
+                    .size(48.dp)
+                    .testTag("more_options_button")
+            ) {
+                Image(
+                    painter = painterResource(id = R.drawable.ic_more_vert),
+                    contentDescription = "More options",
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            DropdownMenu(
+                expanded = showMoreMenu,
+                onDismissRequest = onDismissMoreMenu
+            ) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(id = R.string.action_sync)) },
+                    leadingIcon = {
+                        Image(
+                            painter = painterResource(id = R.drawable.ic_sync),
+                            contentDescription = null,
+                            colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.onSurface),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    },
+                    onClick = onSyncClick
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(id = R.string.action_edit_profile)) },
+                    leadingIcon = {
+                        Image(
+                            painter = painterResource(id = R.drawable.ic_nav_profile),
+                            contentDescription = null,
+                            colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.onSurface),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    },
+                    onClick = onEditProfileClick
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(id = R.string.action_sign_out), color = MaterialTheme.colorScheme.primary) },
+                    leadingIcon = {
+                        Image(
+                            painter = painterResource(id = R.drawable.ic_sign_out),
+                            contentDescription = null,
+                            colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.primary),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    },
+                    onClick = onSignOutClick
+                )
+            }
         }
     }
 }
@@ -561,13 +836,16 @@ private fun HomeBottomNavBar(
     onChatsClick: () -> Unit,
     onContactsClick: () -> Unit,
     onOpenPost: () -> Unit,
-    onComingSoon: () -> Unit
+    onFeedsClick: () -> Unit,
+    onProfileClick: () -> Unit
 ) {
     val barBg = if (isDarkTheme) Color(0xFF16181C) else Color.White
     val inactiveTint = MaterialTheme.colorScheme.onSurfaceVariant
     val activeColor = MaterialTheme.colorScheme.primary
     val chatsActive = activeTab == HomeTab.CHATS
     val contactsActive = activeTab == HomeTab.CONTACTS
+    val feedsActive = activeTab == HomeTab.FEEDS
+    val profileActive = activeTab == HomeTab.PROFILE
 
     Surface(
         color = barBg,
@@ -636,10 +914,10 @@ private fun HomeBottomNavBar(
                 BottomNavItem(
                     iconRes = R.drawable.ic_nav_feeds,
                     label = stringResource(id = R.string.nav_feeds),
-                    tint = inactiveTint,
-                    isActive = false,
+                    tint = if (feedsActive) activeColor else inactiveTint,
+                    isActive = feedsActive,
                     useIconTint = true,
-                    onClick = onComingSoon,
+                    onClick = onFeedsClick,
                     modifier = Modifier
                         .weight(1f)
                         .testTag("nav_feeds_tab")
@@ -647,10 +925,10 @@ private fun HomeBottomNavBar(
                 BottomNavItem(
                     iconRes = R.drawable.ic_nav_profile,
                     label = stringResource(id = R.string.nav_profile),
-                    tint = inactiveTint,
-                    isActive = false,
+                    tint = if (profileActive) activeColor else inactiveTint,
+                    isActive = profileActive,
                     useIconTint = true,
-                    onClick = onComingSoon,
+                    onClick = onProfileClick,
                     modifier = Modifier
                         .weight(1f)
                         .testTag("nav_profile_tab")
@@ -701,13 +979,16 @@ private fun HomeNavigationRail(
     onChatsClick: () -> Unit,
     onContactsClick: () -> Unit,
     onOpenPost: () -> Unit,
-    onComingSoon: () -> Unit
+    onFeedsClick: () -> Unit,
+    onProfileClick: () -> Unit
 ) {
     val railBg = if (isDarkTheme) Color(0xFF16181C) else MaterialTheme.colorScheme.surfaceVariant
     val inactiveTint = MaterialTheme.colorScheme.onSurfaceVariant
     val activeColor = MaterialTheme.colorScheme.primary
     val chatsActive = activeTab == HomeTab.CHATS
     val contactsActive = activeTab == HomeTab.CONTACTS
+    val feedsActive = activeTab == HomeTab.FEEDS
+    val profileActive = activeTab == HomeTab.PROFILE
 
     Column(
         modifier = Modifier
@@ -754,21 +1035,328 @@ private fun HomeNavigationRail(
         BottomNavItem(
             iconRes = R.drawable.ic_nav_feeds,
             label = stringResource(id = R.string.nav_feeds),
-            tint = inactiveTint,
-            isActive = false,
+            tint = if (feedsActive) activeColor else inactiveTint,
+            isActive = feedsActive,
             useIconTint = true,
-            onClick = onComingSoon,
+            onClick = onFeedsClick,
             modifier = Modifier.testTag("rail_feeds_tab")
         )
         BottomNavItem(
             iconRes = R.drawable.ic_nav_profile,
             label = stringResource(id = R.string.nav_profile),
-            tint = inactiveTint,
-            isActive = false,
+            tint = if (profileActive) activeColor else inactiveTint,
+            isActive = profileActive,
             useIconTint = true,
-            onClick = onComingSoon,
+            onClick = onProfileClick,
             modifier = Modifier.testTag("rail_profile_tab")
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ProfileOverviewContent(
+    modifier: Modifier,
+    session: AuthSessionDto,
+    profile: MyProfileDto?,
+    feedState: VideoFeedUiState,
+    feedController: FeedController,
+    onEditProfile: () -> Unit,
+    onSyncNow: () -> Unit,
+    onSignOut: () -> Unit
+) {
+    val displayName = profile?.fullName?.takeIf { it.isNotBlank() } ?: session.displayName
+    val username = profile?.username.orEmpty()
+    val email = profile?.email?.takeIf { it.isNotBlank() } ?: session.email
+    var showSavedSheet by remember { mutableStateOf(false) }
+    var showSafetySheet by remember { mutableStateOf(false) }
+    val safety = feedState.profileSavedAndSafety
+
+    LazyColumn(
+        modifier = modifier
+            .background(MaterialTheme.colorScheme.background)
+            .padding(horizontal = 20.dp),
+        contentPadding = PaddingValues(top = 24.dp, bottom = 96.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        item {
+            Column(
+                modifier = Modifier.widthIn(max = 460.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(84.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = displayName.ifBlank { "T" }.take(2).uppercase(),
+                        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Spacer(modifier = Modifier.height(14.dp))
+                Text(
+                    text = displayName.ifBlank { "Telefam" },
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                if (username.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "@$username",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                if (email.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = email,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (!profile?.bio.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = profile!!.bio,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        textAlign = TextAlign.Center
+                    )
+                }
+                if (!profile?.location.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = profile!!.location,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+                Button(
+                    onClick = onEditProfile,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = Color.White
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("profile_edit_button")
+                ) {
+                    Text(stringResource(id = R.string.action_edit_profile))
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = {
+                        feedController.refreshSavedVideos()
+                        showSavedSheet = true
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("profile_saved_videos_button")
+                ) {
+                    Text("${stringResource(id = R.string.feed_saved_videos_title)} (${safety.savedVideos.size})")
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = {
+                        feedController.refreshSafetyPreferences()
+                        showSafetySheet = true
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("profile_safety_button")
+                ) {
+                    val totalRestricted = safety.mutedUsers.size + safety.blockedUsers.size
+                    Text("${stringResource(id = R.string.feed_safety_title)} ($totalRestricted)")
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = onSyncNow,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                ) {
+                    Text(stringResource(id = R.string.action_sync))
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = onSignOut,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("profile_sign_out_button")
+                ) {
+                    Text(stringResource(id = R.string.action_sign_out))
+                }
+            }
+        }
+    }
+
+    if (showSavedSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showSavedSheet = false },
+            containerColor = Color(0xFF15171C),
+            contentColor = Color.White,
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 240.dp, max = 540.dp)
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+            ) {
+                Text(
+                    text = stringResource(id = R.string.feed_saved_videos_title),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                if (safety.isLoadingSaved && safety.savedVideos.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxWidth().height(160.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                    }
+                } else if (safety.savedVideos.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxWidth().height(140.dp), contentAlignment = Alignment.Center) {
+                        Text(
+                            text = stringResource(id = R.string.feed_empty_for_you),
+                            color = Color.White.copy(alpha = 0.65f)
+                        )
+                    }
+                } else {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(3),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        itemsIndexed(safety.savedVideos, key = { _, v -> v.videoId }) { idx, video ->
+                            val thumb = TelefamNetworkClient.resolveMediaUrl(video.thumbnailUrl)
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(140.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(Color(0xFF23262F))
+                                    .clickable {
+                                        showSavedSheet = false
+                                        feedController.openModalFeedPlayer(
+                                            "Saved Videos",
+                                            safety.savedVideos,
+                                            idx
+                                        )
+                                    }
+                            ) {
+                                if (thumb.isNotBlank()) {
+                                    AsyncImage(
+                                        model = thumb,
+                                        contentDescription = video.title,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
+                                Text(
+                                    text = FeedFormatter.formatCount(video.viewsCount),
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    modifier = Modifier
+                                        .align(Alignment.BottomStart)
+                                        .background(Color.Black.copy(alpha = 0.55f))
+                                        .padding(horizontal = 6.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showSafetySheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showSafetySheet = false },
+            containerColor = Color(0xFF15171C),
+            contentColor = Color.White,
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ) {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 200.dp, max = 500.dp)
+                    .padding(horizontal = 18.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                item {
+                    Text(
+                        text = stringResource(id = R.string.feed_safety_title),
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+                if (safety.mutedUsers.isEmpty() && safety.blockedUsers.isEmpty()) {
+                    item {
+                        Text(
+                            text = stringResource(id = R.string.feed_search_empty),
+                            color = Color.White.copy(alpha = 0.65f),
+                            modifier = Modifier.padding(vertical = 18.dp)
+                        )
+                    }
+                }
+                items(safety.mutedUsers, key = { "muted_${it.userId}" }) { user ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0xFF1E222B))
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(user.fullName.ifBlank { user.username }, color = Color.White, fontWeight = FontWeight.SemiBold)
+                            Text("@${user.username}", color = Color.White.copy(alpha = 0.65f), fontSize = 12.sp)
+                        }
+                        TextButton(onClick = { feedController.unmuteUser(user.userId) }) {
+                            Text(stringResource(id = R.string.feed_unmute), color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
+                items(safety.blockedUsers, key = { "blocked_${it.userId}" }) { user ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0xFF1E222B))
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(user.fullName.ifBlank { user.username }, color = Color.White, fontWeight = FontWeight.SemiBold)
+                            Text("@${user.username}", color = Color.White.copy(alpha = 0.65f), fontSize = 12.sp)
+                        }
+                        TextButton(onClick = { feedController.unblockUser(user.userId) }) {
+                            Text(stringResource(id = R.string.feed_unblock), color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

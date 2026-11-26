@@ -12,6 +12,8 @@ enum AuthStep {
 enum HomeTabIOS {
     case chats
     case contacts
+    case feeds
+    case profile
 }
 
 enum PostTabModeIOS: String, CaseIterable, Identifiable {
@@ -151,8 +153,9 @@ final class TelefamViewModel: ObservableObject {
     @Published var messages: [ChatMessageItem] = []
     @Published var pendingSyncCount: Int32 = 0
 
-    // Contacts state
+    // Contacts, Feeds, Profile & Notifications state
     @Published var activeTab: HomeTabIOS = .chats
+    @Published var homeSearchQuery: String = ""
     @Published var contactFilter: ContactFilterIOS = .all
     @Published var contactSearchQuery: String = ""
     @Published var cachedContacts: [ContactUserItem] = []
@@ -160,6 +163,55 @@ final class TelefamViewModel: ObservableObject {
     @Published var hasMoreContacts: Bool = false
     @Published var contactsNextCursor: String = ""
     @Published var contactsToastMessage: String?
+
+    @Published var isEditingProfile: Bool = false
+    @Published var myProfile: MyProfilePayload? = nil
+    @Published var feedPosts: [FeedPostItem] = []
+    @Published var isLoadingFeed: Bool = false
+    @Published var notifications: [NotificationItem] = []
+    @Published var isLoadingNotifications: Bool = false
+
+    // Short-video Feed, Discovery, Search, Safety & Modals
+    @Published var videoFeedTab: String = "for_you" // "for_you" | "following"
+    @Published var forYouVideos: [FeedVideoItem] = []
+    @Published var followingVideos: [FeedVideoItem] = []
+    @Published var forYouCursor: String = ""
+    @Published var followingCursor: String = ""
+    @Published var forYouHasMore: Bool = false
+    @Published var followingHasMore: Bool = false
+    @Published var isLoadingVideoFeed: Bool = false
+    @Published var isRefreshingVideoFeed: Bool = false
+    @Published var videoFeedError: String? = nil
+    @Published var activeForYouIndex: Int = 0
+    @Published var activeFollowingIndex: Int = 0
+
+    @Published var showLiveComingSoon: Bool = false
+    @Published var showFeedSearch: Bool = false
+    @Published var feedSearchQuery: String = ""
+    @Published var feedSearchTab: Int = 0 // 0=Videos, 1=Hashtags, 2=Creators, 3=Sounds
+    @Published var isSearchingFeed: Bool = false
+    @Published var feedSearchResults: FeedSearchPayload? = nil
+    @Published var localRecentSearches: [String] = []
+
+    @Published var activeHashtagTag: String? = nil
+    @Published var hashtagDiscovery: HashtagDiscoveryPayload? = nil
+    @Published var isLoadingHashtagDiscovery: Bool = false
+
+    @Published var activeAudioId: String? = nil
+    @Published var audioDiscovery: AudioDiscoveryPayload? = nil
+    @Published var isLoadingAudioDiscovery: Bool = false
+
+    @Published var modalFeedVideos: [FeedVideoItem] = []
+    @Published var modalFeedInitialIndex: Int = 0
+    @Published var modalFeedTitle: String = ""
+    @Published var showModalFeedPlayer: Bool = false
+
+    @Published var savedVideos: [FeedVideoItem] = []
+    @Published var isLoadingSavedVideos: Bool = false
+    @Published var safetyPreferences: SafetyPreferencesPayload = SafetyPreferencesPayload(muted_users: [], blocked_users: [])
+    @Published var isLoadingSafetyPreferences: Bool = false
+
+    @Published var feedPlaybackState: FeedPlaybackStateIOS = FeedPlaybackStateIOS()
 
     // Profile setup state
     @Published var fullName: String = ""
@@ -226,6 +278,7 @@ final class TelefamViewModel: ObservableObject {
 
     let core: TelefamCoreBridge
     let api: TelefamAPIClient
+    let feedPlayback: FeedPlaybackManager
     let appleSignIn = AppleSignInCoordinator()
     let deviceFP: String
     let hwAttest: String
@@ -235,6 +288,8 @@ final class TelefamViewModel: ObservableObject {
     private var contactSearchTask: Task<Void, Never>?
     private var songSearchTask: Task<Void, Never>?
     private var hashtagSearchTask: Task<Void, Never>?
+    var feedSearchTask: Task<Void, Never>?
+    private var feedPlaybackCancellable: AnyCancellable?
     private var audioPlayer: AVPlayer?
     private var audioEndObserver: NSObjectProtocol?
 
@@ -256,6 +311,27 @@ final class TelefamViewModel: ObservableObject {
         }
     }
 
+    var filteredConversations: [ConversationItem] {
+        let q = homeSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return conversations }
+        return conversations.filter { $0.title.lowercased().contains(q) }
+    }
+
+    var filteredFeedPosts: [FeedPostItem] {
+        let q = homeSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return feedPosts }
+        return feedPosts.filter { post in
+            post.body.lowercased().contains(q) ||
+                post.author_name.lowercased().contains(q) ||
+                post.author_handle.lowercased().contains(q) ||
+                (post.hashtags ?? []).contains { $0.lowercased().contains(q) }
+        }
+    }
+
+    var unreadNotificationCount: Int {
+        notifications.filter { !$0.is_read }.count
+    }
+
     init() {
         let docs = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
@@ -263,7 +339,11 @@ final class TelefamViewModel: ObservableObject {
         let vaultPath = docs.appendingPathComponent("telefam_vault.dat").path
         let masterKey = KeychainVault.loadOrCreateMasterKey()
         self.core = TelefamCoreBridge(vaultPath: vaultPath, masterKey: masterKey)
-        self.api = TelefamAPIClient()
+        let apiClient = TelefamAPIClient()
+        self.api = apiClient
+        self.feedPlayback = FeedPlaybackManager(resolveURL: { raw in
+            apiClient.resolveMediaURL(raw)
+        })
 
         let hwId = KeychainVault.loadOrCreateHardwareSecretId()
         let model = KeychainVault.hardwareModel()
@@ -281,7 +361,30 @@ final class TelefamViewModel: ObservableObject {
             hardwareSecretId: hwId
         )
 
+        self.feedPlaybackCancellable = self.feedPlayback.$playbackState
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] st in
+                self?.feedPlaybackState = st
+            }
+
+        self.feedPlayback.onRefreshSignedURL = { [weak self] videoId in
+            await self?.refreshSignedVideoStreamURL(videoId: videoId)
+        }
+        self.feedPlayback.onReportWatchProgress = { [weak self] videoId, watchMs, posMs, pct, rewatchDelta, isViewPing in
+            Task { @MainActor [weak self] in
+                await self?.sendWatchProgress(
+                    videoId: videoId,
+                    watchMs: watchMs,
+                    positionMs: posMs,
+                    completionPct: pct,
+                    rewatchDelta: rewatchDelta,
+                    isViewPing: isViewPing
+                )
+            }
+        }
+
         restoreEncryptedSession()
+        restoreEncryptedVideoFeedCaches()
     }
 
     func toggleTheme() {
@@ -482,6 +585,7 @@ final class TelefamViewModel: ObservableObject {
                 let _ = core.enqueueMutation(id: UUID().uuidString, actionType: "profile_setup", payloadJSON: json)
                 pendingSyncCount = core.pendingOutboxCount()
             }
+            isEditingProfile = false
             persistSession(updated)
             return
         }
@@ -489,11 +593,14 @@ final class TelefamViewModel: ObservableObject {
         isSubmittingProfile = true
         defer { isSubmittingProfile = false }
         do {
-            let _ = try await api.setupProfile(token: currentSession.access_token, request: req)
+            let _ = try await withAuthedRetry { tok in
+                try await self.api.setupProfile(token: tok, request: req)
+            }
+            isEditingProfile = false
             persistSession(updated)
             await syncAll(quality: quality)
-        } catch let TelefamAPIError.sanitized(msg) {
-            profileErrorMessage = msg
+        } catch let err as TelefamAPIError {
+            profileErrorMessage = err.message
         } catch {
             profileErrorMessage = TelefamCoreBridge.sanitizeError(httpStatus: 0)
         }
@@ -545,27 +652,145 @@ final class TelefamViewModel: ObservableObject {
         }
     }
 
+    func withAuthedRetry<T>(_ block: @escaping (String) async throws -> T) async throws -> T {
+        guard let current = session else {
+            throw TelefamAPIError.unauthorized(TelefamCoreBridge.sanitizeError(httpStatus: 401))
+        }
+        do {
+            return try await block(current.access_token)
+        } catch TelefamAPIError.unauthorized {
+            guard !current.refresh_token.isEmpty else {
+                throw TelefamAPIError.unauthorized(TelefamCoreBridge.sanitizeError(httpStatus: 401))
+            }
+            let refreshed = try await api.refreshSession(
+                refreshToken: current.refresh_token,
+                deviceFP: deviceFP,
+                hwAttest: hwAttest
+            )
+            persistSession(refreshed)
+            return try await block(refreshed.access_token)
+        }
+    }
+
     func syncAll(quality: TelefamNetworkQuality) async {
         guard let sess = session, sess.profile_completed, quality != .offline else { return }
         let batchSize = TelefamCoreBridge.adaptiveBatchSize(netState: quality)
         if batchSize > 0 && core.pendingOutboxCount() > 0 {
             let batchJSON = core.peekOutboxBatch(maxItems: batchSize)
-            if let acked = try? await api.syncMutationsRaw(token: sess.access_token, mutationsArrayJSON: batchJSON) {
+            if let acked = try? await withAuthedRetry({ tok in
+                try await self.api.syncMutationsRaw(token: tok, mutationsArrayJSON: batchJSON)
+            }) {
                 for id in acked { core.ackMutation(id: id) }
                 pendingSyncCount = core.pendingOutboxCount()
             }
         }
-        if let remoteConvs = try? await api.listConversations(token: sess.access_token) {
+        if let remoteConvs = try? await withAuthedRetry({ tok in
+            try await self.api.listConversations(token: tok)
+        }) {
             conversations = remoteConvs
             persistCachedConversations(remoteConvs)
         }
         if let cid = selectedConversationId,
-           let remoteMsgs = try? await api.listMessages(token: sess.access_token, conversationId: cid) {
+           let remoteMsgs = try? await withAuthedRetry({ tok in
+               try await self.api.listMessages(token: tok, conversationId: cid)
+           }) {
             messages = remoteMsgs
             persistCachedMessages(conversationId: cid, items: remoteMsgs)
         }
         await refreshContacts(reset: true, quality: quality)
+        await refreshMyProfile(quality: quality)
+        await refreshFeedPosts(quality: quality)
+        await refreshVideoFeed(tab: videoFeedTab, reset: true, quality: quality)
+        await refreshNotifications(quality: quality)
         await flushQueuedPosts(quality: quality)
+    }
+
+    func refreshMyProfile(quality: TelefamNetworkQuality) async {
+        guard session != nil, quality != .offline else { return }
+        if let profile = try? await withAuthedRetry({ tok in
+            try await self.api.getMyProfile(token: tok)
+        }) {
+            self.myProfile = profile
+            persistCachedMyProfile(profile)
+        }
+    }
+
+    func refreshFeedPosts(quality: TelefamNetworkQuality) async {
+        guard session != nil, quality != .offline else {
+            isLoadingFeed = false
+            return
+        }
+        isLoadingFeed = true
+        defer { isLoadingFeed = false }
+        if let posts = try? await withAuthedRetry({ tok in
+            try await self.api.listFeedPosts(token: tok, query: self.homeSearchQuery)
+        }) {
+            self.feedPosts = posts
+            if homeSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                persistCachedFeed(posts)
+            }
+        }
+    }
+
+    func refreshNotifications(quality: TelefamNetworkQuality) async {
+        guard session != nil, quality != .offline else {
+            isLoadingNotifications = false
+            return
+        }
+        isLoadingNotifications = true
+        defer { isLoadingNotifications = false }
+        if let items = try? await withAuthedRetry({ tok in
+            try await self.api.listNotifications(token: tok)
+        }) {
+            self.notifications = items
+            persistCachedNotifications(items)
+        }
+    }
+
+    func markNotificationsRead(quality: TelefamNetworkQuality) async {
+        notifications = notifications.map {
+            NotificationItem(
+                id: $0.id,
+                kind: $0.kind,
+                actor_name: $0.actor_name,
+                message: $0.message,
+                is_read: true,
+                created_at: $0.created_at
+            )
+        }
+        persistCachedNotifications(notifications)
+        guard quality != .offline else { return }
+        let _ = try? await withAuthedRetry { tok in
+            try await self.api.markNotificationsRead(token: tok)
+        }
+    }
+
+    func openEditProfile() {
+        if let p = myProfile {
+            fullName = p.full_name
+            username = p.username
+            if !p.country_iso.isEmpty { countryIso = p.country_iso }
+            phoneNumber = p.phone_number
+            gender = p.gender
+            locationText = p.location
+            bioText = p.bio
+            avatarFingerprintHash = p.avatar_fingerprint_hash
+            let df = DateFormatter()
+            df.dateFormat = "yyyy-MM-dd"
+            if let d = df.date(from: p.date_of_birth) {
+                birthDate = d
+                hasSelectedDob = true
+            }
+        } else if let s = session {
+            seedProfileSetup(email: s.email)
+        }
+        profileErrorMessage = nil
+        isEditingProfile = true
+    }
+
+    func closeEditProfile() {
+        profileErrorMessage = nil
+        isEditingProfile = false
     }
 
     func selectContactFilter(_ filter: ContactFilterIOS, quality: TelefamNetworkQuality) {
@@ -646,7 +871,7 @@ final class TelefamViewModel: ObservableObject {
         }
     }
 
-    private func showContactsToast(_ message: String) {
+    func showContactsToast(_ message: String) {
         contactsToastMessage = message
         Task {
             try? await Task.sleep(nanoseconds: 1_800_000_000)
@@ -688,12 +913,37 @@ final class TelefamViewModel: ObservableObject {
     }
 
     func signOut() {
+        let tokenToRevoke = session?.access_token
+        if let tokenToRevoke, !tokenToRevoke.isEmpty {
+            let client = self.api
+            Task.detached {
+                await client.logoutSession(token: tokenToRevoke)
+            }
+        }
         stopSongPreview()
+        feedPlayback.setFeedVisible(false)
         core.vaultDelete(key: "session_json")
         core.vaultDelete(key: "conversations_json")
         core.vaultDelete(key: "contacts_cache_json")
         core.vaultDelete(key: "queued_posts_json")
+        core.vaultDelete(key: "my_profile_json")
+        core.vaultDelete(key: "feed_cache_json")
+        core.vaultDelete(key: "video_feed_for_you_json")
+        core.vaultDelete(key: "video_feed_following_json")
+        core.vaultDelete(key: "video_feed_saved_json")
+        core.vaultDelete(key: "feed_recent_searches_json")
+        core.vaultDelete(key: "notifications_json")
         session = nil
+        myProfile = nil
+        feedPosts = []
+        forYouVideos = []
+        followingVideos = []
+        savedVideos = []
+        localRecentSearches = []
+        feedSearchResults = nil
+        notifications = []
+        homeSearchQuery = ""
+        isEditingProfile = false
         conversations = []
         messages = []
         cachedContacts = []
@@ -1058,6 +1308,7 @@ final class TelefamViewModel: ObservableObject {
             let _ = try await api.createPost(token: sess.access_token, request: req)
             postUploadProgress = 100
             postUploadStatus = .uploaded
+            await refreshVideoFeed(tab: videoFeedTab, reset: true, quality: quality)
             try? await Task.sleep(nanoseconds: 700_000_000)
             closePostComposer()
         } catch let TelefamAPIError.sanitized(msg) {
@@ -1294,6 +1545,18 @@ final class TelefamViewModel: ObservableObject {
            let savedContacts = try? JSONDecoder().decode([ContactUserItem].self, from: contactsData) {
             self.cachedContacts = savedContacts
         }
+        if let profileData = core.vaultGet(key: "my_profile_json"),
+           let savedProfile = try? JSONDecoder().decode(MyProfilePayload.self, from: profileData) {
+            self.myProfile = savedProfile
+        }
+        if let feedData = core.vaultGet(key: "feed_cache_json"),
+           let savedFeed = try? JSONDecoder().decode([FeedPostItem].self, from: feedData) {
+            self.feedPosts = savedFeed
+        }
+        if let notifData = core.vaultGet(key: "notifications_json"),
+           let savedNotifs = try? JSONDecoder().decode([NotificationItem].self, from: notifData) {
+            self.notifications = savedNotifs
+        }
         self.pendingSyncCount = core.pendingOutboxCount()
     }
 
@@ -1306,6 +1569,24 @@ final class TelefamViewModel: ObservableObject {
     private func persistCachedContacts(_ items: [ContactUserItem]) {
         if let data = try? JSONEncoder().encode(items) {
             let _ = core.vaultPut(key: "contacts_cache_json", data: data)
+        }
+    }
+
+    private func persistCachedMyProfile(_ profile: MyProfilePayload) {
+        if let data = try? JSONEncoder().encode(profile) {
+            let _ = core.vaultPut(key: "my_profile_json", data: data)
+        }
+    }
+
+    private func persistCachedFeed(_ items: [FeedPostItem]) {
+        if let data = try? JSONEncoder().encode(items) {
+            let _ = core.vaultPut(key: "feed_cache_json", data: data)
+        }
+    }
+
+    private func persistCachedNotifications(_ items: [NotificationItem]) {
+        if let data = try? JSONEncoder().encode(items) {
+            let _ = core.vaultPut(key: "notifications_json", data: data)
         }
     }
 
