@@ -83,6 +83,42 @@ func ExtractClientIP(r *http.Request) string {
 	return "0.0.0.0"
 }
 
+func ExtractClientIPTrusted(r *http.Request, trustedProxies []*net.IPNet) string {
+	remote := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(remote); err == nil {
+		remote = host
+	}
+	current := net.ParseIP(remote)
+	if current == nil {
+		return "0.0.0.0"
+	}
+	if !isTrustedProxy(current, trustedProxies) {
+		return current.String()
+	}
+
+	forwarded := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+	for i := len(forwarded) - 1; i >= 0; i-- {
+		if !isTrustedProxy(current, trustedProxies) {
+			break
+		}
+		candidate := net.ParseIP(strings.TrimSpace(forwarded[i]))
+		if candidate == nil {
+			break
+		}
+		current = candidate
+	}
+	return current.String()
+}
+
+func isTrustedProxy(ip net.IP, trustedProxies []*net.IPNet) bool {
+	for _, proxy := range trustedProxies {
+		if proxy != nil && proxy.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 func ComputeIPFingerprint(pepper []byte, rawIP string) string {
 	parsed := net.ParseIP(rawIP)
 	subnet := "unknown"

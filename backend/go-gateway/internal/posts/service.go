@@ -493,6 +493,7 @@ func (s *Service) CreatePost(ctx context.Context, authorID uuid.UUID, req Create
 	contentFP := hex.EncodeToString(mac.Sum(nil))
 
 	postID := uuid.New()
+	var createdVideoID uuid.UUID
 	err = db.WithUserRLS(ctx, s.pool, authorID, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO posts (
@@ -559,7 +560,6 @@ func (s *Service) CreatePost(ctx context.Context, authorID uuid.UUID, req Create
 			}
 		}
 
-		var createdVideoID uuid.UUID
 		if postType == "video" && len(req.MediaIDs) > 0 {
 			primaryMid, pErr := uuid.Parse(strings.TrimSpace(req.MediaIDs[0]))
 			if pErr == nil {
