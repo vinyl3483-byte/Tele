@@ -228,6 +228,20 @@ final class TelefamViewModel: ObservableObject {
     @Published var profileErrorMessage: String?
     @Published var isSubmittingProfile: Bool = false
 
+    // Owner Profile screen state (locally cached avatar, up to 5 backgrounds, category grids)
+    @Published var ownerActiveCategory: OwnerProfileTabIOS = .posts
+    @Published var ownerItemsByCategory: [OwnerProfileTabIOS: [OwnerProfileItem]] = [:]
+    @Published var isLoadingOwnerItems: Bool = false
+    @Published var isRefreshingOwnerProfile: Bool = false
+    @Published var isUploadingOwnerBackgrounds: Bool = false
+    @Published var ownerLocalAvatarPath: String? = nil
+    @Published var ownerLocalBackgroundPaths: [String] = []
+    @Published var ownerConnectionsMode: String? = nil
+    @Published var ownerConnectionsUsers: [ContactUserItem] = []
+    @Published var isLoadingOwnerConnections: Bool = false
+    @Published var activeOwnerViewerItem: OwnerProfileItem? = nil
+    @Published var ownerProfileToast: String? = nil
+
     // New Post composer state
     @Published var isPostComposerOpen: Bool = false
     @Published var postMode: PostTabModeIOS = .text
@@ -385,6 +399,7 @@ final class TelefamViewModel: ObservableObject {
 
         restoreEncryptedSession()
         restoreEncryptedVideoFeedCaches()
+        restoreOwnerProfileLocalCache()
     }
 
     func toggleTheme() {
@@ -531,9 +546,37 @@ final class TelefamViewModel: ObservableObject {
     func setCroppedAvatar(jpegData: Data, quality: TelefamNetworkQuality) async {
         self.avatarJPEGData = jpegData
         self.profileErrorMessage = nil
+        if let localPath = saveOwnerAvatarLocally(jpegData: jpegData) {
+            self.ownerLocalAvatarPath = localPath
+        }
         guard let sess = session, quality != .offline else { return }
         if let res = try? await api.uploadAvatar(token: sess.access_token, jpegData: jpegData) {
             self.avatarFingerprintHash = res.avatar_fingerprint_hash
+            if let existing = myProfile {
+                let updated = MyProfilePayload(
+                    user_id: existing.user_id,
+                    email: existing.email,
+                    full_name: existing.full_name,
+                    username: existing.username,
+                    country_iso: existing.country_iso,
+                    phone_number: existing.phone_number,
+                    gender: existing.gender,
+                    date_of_birth: existing.date_of_birth,
+                    location: existing.location,
+                    bio: existing.bio,
+                    avatar_fingerprint_hash: res.avatar_fingerprint_hash,
+                    profile_completed: existing.profile_completed,
+                    avatar_url: existing.avatar_url,
+                    followers_count: existing.followers_count,
+                    following_count: existing.following_count,
+                    posts_count: existing.posts_count,
+                    views_count: existing.views_count,
+                    likes_count: existing.likes_count,
+                    background_photos: existing.background_photos
+                )
+                self.myProfile = updated
+                persistCachedMyProfile(updated)
+            }
         }
     }
 
@@ -593,9 +636,12 @@ final class TelefamViewModel: ObservableObject {
         isSubmittingProfile = true
         defer { isSubmittingProfile = false }
         do {
-            let _ = try await withAuthedRetry { tok in
+            let savedProfile = try await withAuthedRetry { tok in
                 try await self.api.setupProfile(token: tok, request: req)
             }
+            self.myProfile = savedProfile
+            persistCachedMyProfile(savedProfile)
+            updated.profile_completed = true
             isEditingProfile = false
             persistSession(updated)
             await syncAll(quality: quality)
@@ -712,6 +758,7 @@ final class TelefamViewModel: ObservableObject {
         }) {
             self.myProfile = profile
             persistCachedMyProfile(profile)
+            await ensureOwnerMediaCachedLocally(profile: profile)
         }
     }
 
@@ -896,7 +943,7 @@ final class TelefamViewModel: ObservableObject {
         persistCachedContacts(cachedContacts)
     }
 
-    private func updateCachedContact(userId: String, isFollowing: Bool, followsMe: Bool, relationship: String, riskScore: Int) {
+    func updateCachedContact(userId: String, isFollowing: Bool, followsMe: Bool, relationship: String, riskScore: Int) {
         if let idx = cachedContacts.firstIndex(where: { $0.user_id == userId }) {
             cachedContacts[idx].is_following = isFollowing
             cachedContacts[idx].follows_me = followsMe
@@ -922,6 +969,7 @@ final class TelefamViewModel: ObservableObject {
         }
         stopSongPreview()
         feedPlayback.setFeedVisible(false)
+        clearOwnerProfileLocalCache()
         core.vaultDelete(key: "session_json")
         core.vaultDelete(key: "conversations_json")
         core.vaultDelete(key: "contacts_cache_json")
@@ -1309,6 +1357,7 @@ final class TelefamViewModel: ObservableObject {
             postUploadProgress = 100
             postUploadStatus = .uploaded
             await refreshVideoFeed(tab: videoFeedTab, reset: true, quality: quality)
+            await refreshOwnerProfile(quality: quality, isPullGesture: false)
             try? await Task.sleep(nanoseconds: 700_000_000)
             closePostComposer()
         } catch let TelefamAPIError.sanitized(msg) {
@@ -1572,7 +1621,7 @@ final class TelefamViewModel: ObservableObject {
         }
     }
 
-    private func persistCachedMyProfile(_ profile: MyProfilePayload) {
+    func persistCachedMyProfile(_ profile: MyProfilePayload) {
         if let data = try? JSONEncoder().encode(profile) {
             let _ = core.vaultPut(key: "my_profile_json", data: data)
         }

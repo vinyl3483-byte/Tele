@@ -643,6 +643,21 @@ func (s *Service) queryFeedCandidates(
 	return candidates, nil
 }
 
+func (s *Service) QueryFeedVideosByIDs(ctx context.Context, tx pgx.Tx, viewerID uuid.UUID, videoIDs []uuid.UUID) (map[string]FeedVideoDTO, error) {
+	out := make(map[string]FeedVideoDTO)
+	if len(videoIDs) == 0 {
+		return out, nil
+	}
+	cands, err := s.queryFeedCandidates(ctx, tx, viewerID, `AND v.id = ANY($2)`, videoIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range cands {
+		out[c.dto.VideoID] = c.dto
+	}
+	return out, nil
+}
+
 func (s *Service) GetForYouFeed(ctx context.Context, viewerID uuid.UUID, cursorStr string, limit int) (*FeedPageDTO, int, error) {
 	if limit <= 0 || limit > 30 {
 		limit = 15
@@ -1571,6 +1586,11 @@ func (s *Service) UpdateOwnerVideo(ctx context.Context, ownerID, videoID uuid.UU
 		`, nextTitleEnc, nextDescEnc, nextVis, videoID, ownerID); err != nil {
 			return err
 		}
+
+		_, _ = tx.Exec(ctx, `
+			UPDATE posts SET visibility = $1, updated_at = NOW()
+			WHERE id = (SELECT post_id FROM videos WHERE id = $2) AND author_id = $3
+		`, nextVis, videoID, ownerID)
 
 		list, qErr := s.queryFeedCandidates(ctx, tx, ownerID, `AND v.id = $2`, videoID)
 		if qErr != nil || len(list) == 0 {

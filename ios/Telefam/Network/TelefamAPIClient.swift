@@ -163,6 +163,15 @@ struct CreatePostResponseIOS: Codable {
     let status: String
 }
 
+struct BackgroundPhotoItem: Codable, Identifiable, Equatable {
+    let id: String
+    let sort_order: Int
+    let fingerprint_hash: String
+    let width: Int
+    let height: Int
+    let url: String
+}
+
 struct MyProfilePayload: Codable, Equatable {
     let user_id: String
     let email: String
@@ -176,6 +185,53 @@ struct MyProfilePayload: Codable, Equatable {
     let bio: String
     let avatar_fingerprint_hash: String
     let profile_completed: Bool
+    let avatar_url: String?
+    let followers_count: Int64?
+    let following_count: Int64?
+    let posts_count: Int64?
+    let views_count: Int64?
+    let likes_count: Int64?
+    let background_photos: [BackgroundPhotoItem]?
+
+    var safeFollowersCount: Int64 { followers_count ?? 0 }
+    var safeFollowingCount: Int64 { following_count ?? 0 }
+    var safePostsCount: Int64 { posts_count ?? 0 }
+    var safeViewsCount: Int64 { views_count ?? 0 }
+    var safeLikesCount: Int64 { likes_count ?? 0 }
+    var safeBackgroundPhotos: [BackgroundPhotoItem] { background_photos ?? [] }
+}
+
+struct OwnerProfileItem: Codable, Identifiable, Equatable {
+    let post_id: String
+    let post_type: String
+    let body: String
+    let bg_color_hex: String
+    let bg_theme_id: String
+    let font_family: String
+    let visibility: String
+    let thumbnail_url: String
+    let media_urls: [String]
+    let media_count: Int
+    let likes_count: Int64
+    let views_count: Int64
+    let is_liked: Bool
+    let is_saved: Bool
+    let is_reposted: Bool
+    let created_at: Int64
+    let video: FeedVideoItem?
+
+    var id: String { post_id }
+}
+
+struct OwnerProfileItemsPage: Codable {
+    let items: [OwnerProfileItem]
+    let next_cursor: String
+    let has_more: Bool
+}
+
+struct PostEngageResponse: Codable {
+    let likes_count: Int64
+    let views_count: Int64
 }
 
 struct FeedPostItem: Codable, Identifiable, Equatable {
@@ -553,8 +609,88 @@ final class TelefamAPIClient {
         return try JSONDecoder().decode(AvatarUploadResponse.self, from: data)
     }
 
-    func setupProfile(token: String, request: ProfileSetupRequest) async throws -> ProfileSetupResponse {
+    func setupProfile(token: String, request: ProfileSetupRequest) async throws -> MyProfilePayload {
         try await post(path: "/v1/profile/setup", body: request, token: token)
+    }
+
+    func downloadBinary(token: String, pathOrURL: String) async throws -> Data {
+        guard let url = resolveMediaURL(pathOrURL) else {
+            throw TelefamAPIError.sanitized(TelefamCoreBridge.sanitizeError(httpStatus: 400))
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await perform(req)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw Self.mapHTTPError(code)
+        }
+        return data
+    }
+
+    func uploadBackgroundPhotos(token: String, photosJPEG: [Data]) async throws -> [BackgroundPhotoItem] {
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var body = Data()
+        for (idx, jpeg) in photosJPEG.enumerated() {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"photos\"; filename=\"bg_\(idx).jpg\"\r\n".data(using: .utf8)!)
+            body.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
+            body.append(jpeg)
+            body.append("\r\n".data(using: .utf8)!)
+        }
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+        var req = URLRequest(url: baseURL.appendingPathComponent("/v1/profile/backgrounds"))
+        req.httpMethod = "POST"
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let uploadSession = URLSession(configuration: uploadConfig)
+        defer { uploadSession.finishTasksAndInvalidate() }
+
+        let (data, response) = try await uploadSession.upload(for: req, from: body)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw Self.mapHTTPError(code)
+        }
+        struct Wrapper: Decodable { let background_photos: [BackgroundPhotoItem]? }
+        return try JSONDecoder().decode(Wrapper.self, from: data).background_photos ?? []
+    }
+
+    func deleteBackgroundPhoto(token: String, backgroundId: String) async throws -> [BackgroundPhotoItem] {
+        struct Wrapper: Decodable { let background_photos: [BackgroundPhotoItem]? }
+        let res: Wrapper = try await sendNoBody(method: "DELETE", path: "/v1/profile/backgrounds/\(backgroundId)", token: token)
+        return res.background_photos ?? []
+    }
+
+    func getOwnerProfileItems(token: String, tab: String, cursor: String = "", limit: Int = 30) async throws -> OwnerProfileItemsPage {
+        try await getWithQuery(path: "/v1/profile/me/items", items: [
+            URLQueryItem(name: "tab", value: tab),
+            URLQueryItem(name: "cursor", value: cursor),
+            URLQueryItem(name: "limit", value: String(limit))
+        ], token: token)
+    }
+
+    func setPostVisibility(token: String, postId: String, visibility: String) async throws {
+        let _: EmptyOKPayload = try await sendJSON(
+            method: "PATCH",
+            path: "/v1/profile/posts/\(postId)/visibility",
+            body: ["visibility": visibility],
+            token: token
+        )
+    }
+
+    func engagePost(token: String, postId: String, action: String, active: Bool) async throws -> PostEngageResponse {
+        struct Req: Encodable {
+            let action: String
+            let active: Bool
+        }
+        return try await sendJSON(
+            method: "POST",
+            path: "/v1/profile/posts/\(postId)/engage",
+            body: Req(action: action, active: active),
+            token: token
+        )
     }
 
     func listConversations(token: String) async throws -> [ConversationItem] {

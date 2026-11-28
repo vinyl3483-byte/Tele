@@ -38,19 +38,35 @@ type SetupRequest struct {
 	AvatarFingerprintHash string `json:"avatar_fingerprint_hash"`
 }
 
+type BackgroundPhotoDTO struct {
+	ID              string `json:"id"`
+	SortOrder       int    `json:"sort_order"`
+	FingerprintHash string `json:"fingerprint_hash"`
+	Width           int    `json:"width"`
+	Height          int    `json:"height"`
+	URL             string `json:"url"`
+}
+
 type ProfileResponse struct {
-	UserID                string `json:"user_id"`
-	Email                 string `json:"email,omitempty"`
-	FullName              string `json:"full_name"`
-	Username              string `json:"username"`
-	CountryISO            string `json:"country_iso"`
-	PhoneNumber           string `json:"phone_number"`
-	Gender                string `json:"gender"`
-	DateOfBirth           string `json:"date_of_birth"`
-	Location              string `json:"location"`
-	Bio                   string `json:"bio"`
-	AvatarFingerprintHash string `json:"avatar_fingerprint_hash"`
-	ProfileCompleted      bool   `json:"profile_completed"`
+	UserID                string               `json:"user_id"`
+	Email                 string               `json:"email,omitempty"`
+	FullName              string               `json:"full_name"`
+	Username              string               `json:"username"`
+	CountryISO            string               `json:"country_iso"`
+	PhoneNumber           string               `json:"phone_number"`
+	Gender                string               `json:"gender"`
+	DateOfBirth           string               `json:"date_of_birth"`
+	Location              string               `json:"location"`
+	Bio                   string               `json:"bio"`
+	AvatarFingerprintHash string               `json:"avatar_fingerprint_hash"`
+	AvatarURL             string               `json:"avatar_url"`
+	FollowersCount        int64                `json:"followers_count"`
+	FollowingCount        int64                `json:"following_count"`
+	PostsCount            int64                `json:"posts_count"`
+	ViewsCount            int64                `json:"views_count"`
+	LikesCount            int64                `json:"likes_count"`
+	BackgroundPhotos      []BackgroundPhotoDTO `json:"background_photos"`
+	ProfileCompleted      bool                 `json:"profile_completed"`
 }
 
 var usernameRegex = regexp.MustCompile(`^[a-z0-9_]{3,30}$`)
@@ -115,7 +131,7 @@ func (s *Service) UploadAvatar(ctx context.Context, userID uuid.UUID, rawBytes [
 	}
 
 	err = db.WithUserRLS(ctx, s.pool, userID, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `
+		if _, err := tx.Exec(ctx, `
 			INSERT INTO profile_avatars (user_id, mime_type, byte_size, fingerprint_hash, sanitized_bytes_encrypted)
 			VALUES ($1, $2, $3, $4, $5)
 			ON CONFLICT (user_id) DO UPDATE SET
@@ -124,8 +140,14 @@ func (s *Service) UploadAvatar(ctx context.Context, userID uuid.UUID, rawBytes [
 				fingerprint_hash = EXCLUDED.fingerprint_hash,
 				sanitized_bytes_encrypted = EXCLUDED.sanitized_bytes_encrypted,
 				updated_at = NOW()
-		`, userID, sanitized.MimeType, len(sanitized.Bytes), sanitized.FingerprintHash, encBytes)
-		return err
+		`, userID, sanitized.MimeType, len(sanitized.Bytes), sanitized.FingerprintHash, encBytes); err != nil {
+			return err
+		}
+		_, _ = tx.Exec(ctx, `
+			UPDATE user_profiles SET avatar_fingerprint_hash = $1, updated_at = NOW()
+			WHERE user_id = $2
+		`, sanitized.FingerprintHash, userID)
+		return nil
 	})
 	if err != nil {
 		return "", http.StatusInternalServerError, err
@@ -133,9 +155,38 @@ func (s *Service) UploadAvatar(ctx context.Context, userID uuid.UUID, rawBytes [
 	return sanitized.FingerprintHash, http.StatusOK, nil
 }
 
+func (s *Service) loadProfileSummaryTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, resp *ProfileResponse) error {
+	resp.BackgroundPhotos = []BackgroundPhotoDTO{}
+	if resp.AvatarFingerprintHash != "" {
+		resp.AvatarURL = "/v1/profile/avatar?v=" + resp.AvatarFingerprintHash
+	}
+	_ = tx.QueryRow(ctx, `SELECT COUNT(*) FROM user_follows WHERE followee_id = $1`, userID).Scan(&resp.FollowersCount)
+	_ = tx.QueryRow(ctx, `SELECT COUNT(*) FROM user_follows WHERE follower_id = $1`, userID).Scan(&resp.FollowingCount)
+	_ = tx.QueryRow(ctx, `SELECT COUNT(*) FROM posts WHERE author_id = $1 AND status = 'ready'`, userID).Scan(&resp.PostsCount)
+
+	var videoViews, videoLikes, otherViews, otherLikes int64
+	_ = tx.QueryRow(ctx, `
+		SELECT COALESCE(SUM(views_count), 0), COALESCE(SUM(likes_count), 0)
+		FROM videos WHERE creator_id = $1 AND processing_status = 'ready'
+	`, userID).Scan(&videoViews, &videoLikes)
+	_ = tx.QueryRow(ctx, `
+		SELECT COALESCE(SUM(views_count), 0), COALESCE(SUM(likes_count), 0)
+		FROM posts WHERE author_id = $1 AND post_type <> 'video' AND status = 'ready'
+	`, userID).Scan(&otherViews, &otherLikes)
+	resp.ViewsCount = videoViews + otherViews
+	resp.LikesCount = videoLikes + otherLikes
+
+	bgList, err := s.listBackgroundPhotosTx(ctx, tx, userID)
+	if err == nil {
+		resp.BackgroundPhotos = bgList
+	}
+	return nil
+}
+
 func (s *Service) GetMyProfile(ctx context.Context, userID uuid.UUID) (*ProfileResponse, int, error) {
 	var resp ProfileResponse
 	resp.UserID = userID.String()
+	resp.BackgroundPhotos = []BackgroundPhotoDTO{}
 
 	err := db.WithUserRLS(ctx, s.pool, userID, func(tx pgx.Tx) error {
 		var encEmail, encDisp []byte
@@ -187,7 +238,10 @@ func (s *Service) GetMyProfile(ctx context.Context, userID uuid.UUID) (*ProfileR
 			resp.DateOfBirth = dob.Format("2006-01-02")
 			resp.AvatarFingerprintHash = avatarFP
 		}
-		return nil
+		if resp.AvatarFingerprintHash == "" {
+			_ = tx.QueryRow(ctx, `SELECT COALESCE(fingerprint_hash, '') FROM profile_avatars WHERE user_id = $1`, userID).Scan(&resp.AvatarFingerprintHash)
+		}
+		return s.loadProfileSummaryTx(ctx, tx, userID, &resp)
 	})
 	if err != nil {
 		return nil, http.StatusNotFound, err
@@ -267,17 +321,5 @@ func (s *Service) SetupProfile(ctx context.Context, userID uuid.UUID, req SetupR
 		return nil, http.StatusConflict, err
 	}
 
-	return &ProfileResponse{
-		UserID:                userID.String(),
-		FullName:              fullName,
-		Username:              username,
-		CountryISO:            strings.ToUpper(req.CountryISO),
-		PhoneNumber:           req.PhoneNumber,
-		Gender:                gender,
-		DateOfBirth:           dob.Format("2006-01-02"),
-		Location:              location,
-		Bio:                   bio,
-		AvatarFingerprintHash: req.AvatarFingerprintHash,
-		ProfileCompleted:      true,
-	}, http.StatusOK, nil
+	return s.GetMyProfile(ctx, userID)
 }

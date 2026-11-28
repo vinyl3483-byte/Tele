@@ -21,6 +21,7 @@ import com.telefam.company.app.data.local.OutboxMutationEntity
 import com.telefam.company.app.data.local.QueuedPostEntity
 import com.telefam.company.app.data.local.TelefamDao
 import com.telefam.company.app.network.AuthSessionDto
+import com.telefam.company.app.network.BackgroundPhotoDto
 import com.telefam.company.app.network.CountingBytesRequestBody
 import com.telefam.company.app.network.CountingStreamRequestBody
 import com.telefam.company.app.network.CreateConversationRequest
@@ -36,13 +37,21 @@ import com.telefam.company.app.network.MyProfileDto
 import com.telefam.company.app.network.NotificationDto
 import com.telefam.company.app.network.NotificationsResponse
 import com.telefam.company.app.network.OAuthVerifyRequest
+import com.telefam.company.app.network.OtherUserProfileDto
+import com.telefam.company.app.network.OwnerProfileItemsPageDto
+import com.telefam.company.app.network.PostEngageRequest
+import com.telefam.company.app.network.PostEngageResponse
 import com.telefam.company.app.network.ProfileSetupRequest
 import com.telefam.company.app.network.RefreshSessionRequest
 import com.telefam.company.app.network.SendOtpRequest
+import com.telefam.company.app.network.SetPostVisibilityRequest
+import com.telefam.company.app.network.SetUserNicknameRequest
+import com.telefam.company.app.network.SubmitUserReportRequest
 import com.telefam.company.app.network.SyncMutationsRequest
 import com.telefam.company.app.network.TelefamApiService
 import com.telefam.company.app.network.TelefamNetworkClient
 import com.telefam.company.app.network.VerifyOtpRequest
+import com.telefam.company.app.network.ViewerNicknamesResponse
 import com.telefam.company.app.security.DeviceIdentity
 import com.telefam.company.app.security.TelefamCryptoVault
 import kotlinx.coroutines.Dispatchers
@@ -153,6 +162,11 @@ class TelefamRepository(
 ) {
     private val sessionAdapter = TelefamNetworkClient.moshi.adapter(AuthSessionDto::class.java)
     private val myProfileAdapter = TelefamNetworkClient.moshi.adapter(MyProfileDto::class.java)
+    private val otherProfileAdapter = TelefamNetworkClient.moshi.adapter(OtherUserProfileDto::class.java)
+    private val viewerNicknamesAdapter = TelefamNetworkClient.moshi.adapter(ViewerNicknamesResponse::class.java)
+    private val ownerItemsPageAdapter = TelefamNetworkClient.moshi.adapter(OwnerProfileItemsPageDto::class.java)
+    private val bgPathListType = Types.newParameterizedType(List::class.java, String::class.java)
+    private val bgPathListAdapter = TelefamNetworkClient.moshi.adapter<List<String>>(bgPathListType)
     private val feedResponseAdapter = TelefamNetworkClient.moshi.adapter(FeedPostsResponse::class.java)
     private val notificationsResponseAdapter = TelefamNetworkClient.moshi.adapter(NotificationsResponse::class.java)
     private val mapType = Types.newParameterizedType(Map::class.java, String::class.java, String::class.java)
@@ -160,6 +174,12 @@ class TelefamRepository(
     private val queuedPostAdapter = TelefamNetworkClient.moshi.adapter(QueuedPostPayload::class.java)
     private val uploadApi: TelefamApiService by lazy {
         TelefamNetworkClient.createService(uploadTimeoutSeconds = 120L)
+    }
+    private val ownerMediaCacheDir: File by lazy {
+        File(context.filesDir, "owner_profile_cache").apply { mkdirs() }
+    }
+    private val otherMediaCacheDir: File by lazy {
+        File(context.cacheDir, "other_profile_cache").apply { mkdirs() }
     }
 
     fun observeConversations(): Flow<List<ConversationModel>> =
@@ -237,6 +257,11 @@ class TelefamRepository(
     suspend fun clearSession() {
         dao.deleteKv("session_json")
         dao.deleteKv("my_profile_json")
+        dao.deleteKv("owner_avatar_local_path")
+        dao.deleteKv("owner_bg_cache_json")
+        for (tab in listOf("posts", "reposts", "locked", "saved")) {
+            dao.deleteKv("owner_items_$tab")
+        }
         dao.deleteKv("feed_cache_json")
         dao.deleteKv("notifications_json")
         dao.clearConversations()
@@ -245,6 +270,7 @@ class TelefamRepository(
         dao.clearCachedContacts()
         dao.clearQueuedPosts()
         dao.clearAllCachedFeedVideos()
+        runCatching { ownerMediaCacheDir.deleteRecursively() }
     }
 
     suspend fun logoutFromServer() {
@@ -289,13 +315,17 @@ class TelefamRepository(
         return runCatching { myProfileAdapter.fromJson(vault.decryptString(raw)) }.getOrNull()
     }
 
+    suspend fun cacheMyProfile(profile: MyProfileDto) {
+        dao.putKv(EncryptedKvEntity("my_profile_json", vault.encryptString(myProfileAdapter.toJson(profile))))
+    }
+
     suspend fun fetchMyProfile(): RepoResult<MyProfileDto> {
         return try {
             val res = withAuthedApi { auth -> api.getMyProfile(auth) }
                 ?: return RepoResult.Failure(bridge.sanitizeError(401))
             val body = res.body()
             if (res.isSuccessful && body != null) {
-                dao.putKv(EncryptedKvEntity("my_profile_json", vault.encryptString(myProfileAdapter.toJson(body))))
+                cacheMyProfile(body)
                 RepoResult.Success(body)
             } else {
                 RepoResult.Failure(bridge.sanitizeError(res.code()))
@@ -501,14 +531,25 @@ class TelefamRepository(
     }
 
     suspend fun uploadSanitizedAvatar(jpegBytes: ByteArray): RepoResult<String> {
-        val session = loadEncryptedSession() ?: return RepoResult.Failure(bridge.sanitizeError(401))
         return try {
-            val res = api.uploadAvatar(
-                authHeader = "Bearer ${session.accessToken}",
-                imageBytes = TelefamNetworkClient.jpegBody(jpegBytes)
-            )
+            val res = withAuthedApi { auth ->
+                api.uploadAvatar(
+                    authHeader = auth,
+                    imageBytes = TelefamNetworkClient.jpegBody(jpegBytes)
+                )
+            } ?: return RepoResult.Failure(bridge.sanitizeError(401))
             val body = res.body()
             if (res.isSuccessful && body != null) {
+                saveLocalAvatarBytes(body.avatarFingerprintHash, jpegBytes)
+                val cached = loadCachedMyProfile()
+                if (cached != null) {
+                    cacheMyProfile(
+                        cached.copy(
+                            avatarFingerprintHash = body.avatarFingerprintHash,
+                            avatarUrl = "/v1/profile/avatar?v=${body.avatarFingerprintHash}"
+                        )
+                    )
+                }
                 RepoResult.Success(body.avatarFingerprintHash)
             } else {
                 RepoResult.Failure(bridge.sanitizeError(res.code()))
@@ -527,6 +568,20 @@ class TelefamRepository(
             displayName = request.fullName.trim(),
             profileCompleted = true
         )
+        val existingCached = loadCachedMyProfile()
+        val optimisticProfile = (existingCached ?: MyProfileDto(userId = session.userId, email = session.email)).copy(
+            fullName = request.fullName.trim(),
+            username = request.username.trim().lowercase(),
+            countryIso = request.countryIso.uppercase(),
+            phoneNumber = request.phoneNumber.trim(),
+            gender = request.gender,
+            dateOfBirth = request.dateOfBirth,
+            location = request.location.trim(),
+            bio = request.bio.trim().take(150),
+            avatarFingerprintHash = request.avatarFingerprintHash.ifBlank { existingCached?.avatarFingerprintHash.orEmpty() },
+            profileCompleted = true
+        )
+
         if (quality == NetworkQuality.OFFLINE) {
             val payloadMap = mapOf(
                 "full_name" to request.fullName,
@@ -549,13 +604,17 @@ class TelefamRepository(
                 )
             )
             saveEncryptedSession(updatedSession)
+            cacheMyProfile(optimisticProfile)
             return RepoResult.Success(updatedSession)
         }
 
         return try {
-            val res = api.setupProfile("Bearer ${session.accessToken}", request)
-            if (res.isSuccessful && res.body() != null) {
+            val res = withAuthedApi { auth -> api.setupProfile(auth, request) }
+                ?: return RepoResult.Failure(bridge.sanitizeError(401))
+            val body = res.body()
+            if (res.isSuccessful && body != null) {
                 saveEncryptedSession(updatedSession)
+                cacheMyProfile(body)
                 RepoResult.Success(updatedSession)
             } else {
                 RepoResult.Failure(bridge.sanitizeError(res.code()))
@@ -1254,5 +1313,531 @@ class TelefamRepository(
         return runCatching {
             context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: 0L
         }.getOrDefault(0L)
+    }
+
+    // =========================================================================
+    // OWNER PROFILE LOCAL CACHE, BACKGROUND SLIDESHOW & GRID TABS
+    // =========================================================================
+
+    suspend fun loadCachedAvatarPath(): String? = withContext(Dispatchers.IO) {
+        val raw = dao.getKv("owner_avatar_local_path") ?: return@withContext null
+        val path = runCatching { vault.decryptString(raw) }.getOrNull().orEmpty()
+        path.takeIf { it.isNotBlank() && File(it).exists() }
+    }
+
+    suspend fun saveLocalAvatarBytes(fpHash: String, bytes: ByteArray): String = withContext(Dispatchers.IO) {
+        val safeHash = fpHash.ifBlank { "latest" }.take(32)
+        ownerMediaCacheDir.mkdirs()
+        ownerMediaCacheDir.listFiles()?.forEach { f ->
+            if (f.name.startsWith("avatar_") && f.name != "avatar_$safeHash.jpg") {
+                f.delete()
+            }
+        }
+        val target = File(ownerMediaCacheDir, "avatar_$safeHash.jpg")
+        target.writeBytes(bytes)
+        dao.putKv(EncryptedKvEntity("owner_avatar_local_path", vault.encryptString(target.absolutePath)))
+        target.absolutePath
+    }
+
+    suspend fun ensureAvatarCachedLocally(profile: MyProfileDto): String? = withContext(Dispatchers.IO) {
+        val fp = profile.avatarFingerprintHash.trim()
+        if (fp.isEmpty()) return@withContext null
+        val expectedFile = File(ownerMediaCacheDir, "avatar_${fp.take(32)}.jpg")
+        if (expectedFile.exists() && expectedFile.length() > 0L) {
+            dao.putKv(EncryptedKvEntity("owner_avatar_local_path", vault.encryptString(expectedFile.absolutePath)))
+            return@withContext expectedFile.absolutePath
+        }
+        val res = runCatching {
+            withAuthedApi { auth -> api.downloadMyAvatar(auth) }
+        }.getOrNull()
+        val bytes = res?.takeIf { it.isSuccessful }?.body()?.bytes()
+        if (bytes != null && bytes.isNotEmpty()) {
+            return@withContext saveLocalAvatarBytes(fp, bytes)
+        }
+        loadCachedAvatarPath()
+    }
+
+    suspend fun loadCachedBackgroundPaths(): List<String> = withContext(Dispatchers.IO) {
+        val raw = dao.getKv("owner_bg_cache_json") ?: return@withContext emptyList()
+        val list = runCatching {
+            bgPathListAdapter.fromJson(vault.decryptString(raw))
+        }.getOrNull().orEmpty()
+        list.filter { File(it).exists() }
+    }
+
+    suspend fun ensureBackgroundsCachedLocally(backgrounds: List<BackgroundPhotoDto>): List<String> = withContext(Dispatchers.IO) {
+        ownerMediaCacheDir.mkdirs()
+        val keepNames = mutableSetOf<String>()
+        val resultPaths = mutableListOf<String>()
+        for (bg in backgrounds.take(5)) {
+            val safeId = bg.id.replace(Regex("[^a-zA-Z0-9_-]"), "")
+            val safeHash = bg.fingerprintHash.take(24)
+            if (safeId.isBlank()) continue
+            val fileName = "bg_${safeId}_$safeHash.jpg"
+            keepNames.add(fileName)
+            val file = File(ownerMediaCacheDir, fileName)
+            if (!file.exists() || file.length() == 0L) {
+                val res = runCatching {
+                    withAuthedApi { auth -> api.downloadBackgroundPhoto(auth, bg.id) }
+                }.getOrNull()
+                val bytes = res?.takeIf { it.isSuccessful }?.body()?.bytes()
+                if (bytes != null && bytes.isNotEmpty()) {
+                    file.writeBytes(bytes)
+                }
+            }
+            if (file.exists() && file.length() > 0L) {
+                resultPaths.add(file.absolutePath)
+            }
+        }
+        ownerMediaCacheDir.listFiles()?.forEach { f ->
+            if (f.name.startsWith("bg_") && !keepNames.contains(f.name)) {
+                f.delete()
+            }
+        }
+        dao.putKv(EncryptedKvEntity("owner_bg_cache_json", vault.encryptString(bgPathListAdapter.toJson(resultPaths))))
+        resultPaths
+    }
+
+    suspend fun uploadBackgroundPhotos(uris: List<Uri>): RepoResult<List<BackgroundPhotoDto>> = withContext(Dispatchers.IO) {
+        if (uris.isEmpty()) return@withContext RepoResult.Failure("No photos selected")
+        val parts = mutableListOf<MultipartBody.Part>()
+        uris.take(5).forEachIndexed { idx, uri ->
+            val jpegBytes = compressImageUriToJpeg(uri, maxEdge = 1920, quality = 86) ?: return@forEachIndexed
+            val reqBody = TelefamNetworkClient.jpegBody(jpegBytes)
+            parts.add(MultipartBody.Part.createFormData("photos", "cover_$idx.jpg", reqBody))
+        }
+        if (parts.isEmpty()) return@withContext RepoResult.Failure("Unable to read selected photos")
+
+        try {
+            val res = withAuthedApi { auth -> uploadApi.uploadBackgroundPhotos(auth, parts) }
+                ?: return@withContext RepoResult.Failure(bridge.sanitizeError(401))
+            val body = res.body()
+            if (res.isSuccessful && body != null) {
+                val cached = loadCachedMyProfile()
+                if (cached != null) {
+                    cacheMyProfile(cached.copy(backgroundPhotos = body.backgroundPhotos))
+                }
+                ensureBackgroundsCachedLocally(body.backgroundPhotos)
+                RepoResult.Success(body.backgroundPhotos)
+            } else {
+                RepoResult.Failure(
+                    if (res.code() == 400) "Maximum 5 background photos allowed" else bridge.sanitizeError(res.code())
+                )
+            }
+        } catch (_: Exception) {
+            RepoResult.Failure(bridge.sanitizeError(0))
+        }
+    }
+
+    suspend fun deleteBackgroundPhoto(bgId: String): RepoResult<List<BackgroundPhotoDto>> = withContext(Dispatchers.IO) {
+        try {
+            val res = withAuthedApi { auth -> api.deleteBackgroundPhoto(auth, bgId) }
+                ?: return@withContext RepoResult.Failure(bridge.sanitizeError(401))
+            val body = res.body()
+            if (res.isSuccessful && body != null) {
+                val cached = loadCachedMyProfile()
+                if (cached != null) {
+                    cacheMyProfile(cached.copy(backgroundPhotos = body.backgroundPhotos))
+                }
+                ensureBackgroundsCachedLocally(body.backgroundPhotos)
+                RepoResult.Success(body.backgroundPhotos)
+            } else {
+                RepoResult.Failure(bridge.sanitizeError(res.code()))
+            }
+        } catch (_: Exception) {
+            RepoResult.Failure(bridge.sanitizeError(0))
+        }
+    }
+
+    private fun compressImageUriToJpeg(uri: Uri, maxEdge: Int, quality: Int): ByteArray? {
+        return runCatching {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            context.contentResolver.openInputStream(uri)?.use {
+                BitmapFactory.decodeStream(it, null, bounds)
+            }
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
+            var sample = 1
+            val largest = maxOf(bounds.outWidth, bounds.outHeight)
+            while (largest / sample > maxEdge * 2) {
+                sample *= 2
+            }
+            val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+            val decoded = context.contentResolver.openInputStream(uri)?.use {
+                BitmapFactory.decodeStream(it, null, opts)
+            } ?: return@runCatching null
+
+            val ratio = minOf(maxEdge.toFloat() / decoded.width.coerceAtLeast(1), maxEdge.toFloat() / decoded.height.coerceAtLeast(1))
+            val outBmp = if (ratio < 1f) {
+                Bitmap.createScaledBitmap(
+                    decoded,
+                    (decoded.width * ratio).toInt().coerceAtLeast(1),
+                    (decoded.height * ratio).toInt().coerceAtLeast(1),
+                    true
+                ).also { if (it !== decoded) decoded.recycle() }
+            } else decoded
+
+            val baos = ByteArrayOutputStream()
+            outBmp.compress(Bitmap.CompressFormat.JPEG, quality, baos)
+            outBmp.recycle()
+            baos.toByteArray()
+        }.getOrNull()
+    }
+
+    suspend fun loadCachedOwnerProfileItems(tab: String): OwnerProfileItemsPageDto? {
+        val raw = dao.getKv("owner_items_${tab.lowercase()}") ?: return null
+        return runCatching { ownerItemsPageAdapter.fromJson(vault.decryptString(raw)) }.getOrNull()
+    }
+
+    suspend fun fetchOwnerProfileItems(tab: String, cursor: String = ""): RepoResult<OwnerProfileItemsPageDto> {
+        return try {
+            val normTab = tab.lowercase()
+            val res = withAuthedApi { auth -> api.getOwnerProfileItems(auth, normTab, cursor, 24) }
+                ?: return RepoResult.Failure(bridge.sanitizeError(401))
+            val body = res.body()
+            if (res.isSuccessful && body != null) {
+                if (cursor.isBlank()) {
+                    dao.putKv(EncryptedKvEntity("owner_items_$normTab", vault.encryptString(ownerItemsPageAdapter.toJson(body))))
+                }
+                RepoResult.Success(body)
+            } else {
+                RepoResult.Failure(bridge.sanitizeError(res.code()))
+            }
+        } catch (_: Exception) {
+            RepoResult.Failure(bridge.sanitizeError(0))
+        }
+    }
+
+    suspend fun setPostVisibility(postId: String, visibility: String): RepoResult<String> {
+        return try {
+            val res = withAuthedApi { auth -> api.setPostVisibility(auth, postId, SetPostVisibilityRequest(visibility)) }
+                ?: return RepoResult.Failure(bridge.sanitizeError(401))
+            if (res.isSuccessful) {
+                RepoResult.Success(visibility)
+            } else {
+                RepoResult.Failure(bridge.sanitizeError(res.code()))
+            }
+        } catch (_: Exception) {
+            RepoResult.Failure(bridge.sanitizeError(0))
+        }
+    }
+
+    suspend fun engagePost(postId: String, action: String, active: Boolean): RepoResult<PostEngageResponse> {
+        return try {
+            val res = withAuthedApi { auth -> api.engagePost(auth, postId, PostEngageRequest(action, active)) }
+                ?: return RepoResult.Failure(bridge.sanitizeError(401))
+            val body = res.body()
+            if (res.isSuccessful && body != null) {
+                RepoResult.Success(body)
+            } else {
+                RepoResult.Failure(bridge.sanitizeError(res.code()))
+            }
+        } catch (_: Exception) {
+            RepoResult.Failure(bridge.sanitizeError(0))
+        }
+    }
+
+    suspend fun fetchConnectionsList(filter: String): RepoResult<List<ContactModel>> {
+        return try {
+            val res = withAuthedApi { auth -> api.listContacts(auth, filter = filter, query = "", cursor = "", limit = 50) }
+                ?: return RepoResult.Failure(bridge.sanitizeError(401))
+            val body = res.body()
+            if (res.isSuccessful && body != null) {
+                val list = body.contacts.map { dto ->
+                    ContactModel(
+                        userId = dto.userId,
+                        fullName = dto.fullName,
+                        username = dto.username,
+                        location = dto.location,
+                        avatarFingerprintHash = dto.avatarFingerprintHash,
+                        isFollowing = dto.isFollowing,
+                        followsMe = dto.followsMe,
+                        relationship = bridge.computeRelationship(dto.isFollowing, dto.followsMe),
+                        riskScore = dto.riskScore
+                    )
+                }
+                RepoResult.Success(list)
+            } else {
+                RepoResult.Failure(bridge.sanitizeError(res.code()))
+            }
+        } catch (_: Exception) {
+            RepoResult.Failure(bridge.sanitizeError(0))
+        }
+    }
+
+    // =========================================================================
+    // OTHER USER PROFILE, PRIVATE NICKNAMES, SLIDESHOW & ITEMS CACHE
+    // =========================================================================
+
+    private fun safeUserCacheKey(userId: String): String =
+        userId.replace(Regex("[^a-zA-Z0-9_-]"), "").take(48).ifBlank { "unknown" }
+
+    suspend fun loadCachedViewerNicknames(): Map<String, String> {
+        val raw = dao.getKv("viewer_nicknames_json") ?: return emptyMap()
+        return runCatching {
+            viewerNicknamesAdapter.fromJson(vault.decryptString(raw))?.nicknames.orEmpty()
+        }.getOrDefault(emptyMap())
+    }
+
+    suspend fun fetchViewerNicknames(): Map<String, String>? {
+        return runCatching {
+            val res = withAuthedApi { auth -> api.getViewerNicknames(auth) } ?: return null
+            val body = res.body()
+            if (res.isSuccessful && body != null) {
+                dao.putKv(
+                    EncryptedKvEntity(
+                        "viewer_nicknames_json",
+                        vault.encryptString(viewerNicknamesAdapter.toJson(body))
+                    )
+                )
+                body.nicknames
+            } else null
+        }.getOrNull()
+    }
+
+    suspend fun loadCachedOtherProfile(userId: String): OtherUserProfileDto? {
+        val raw = dao.getKv("other_profile_${safeUserCacheKey(userId)}") ?: return null
+        return runCatching {
+            otherProfileAdapter.fromJson(vault.decryptString(raw))
+        }.getOrNull()
+    }
+
+    suspend fun cacheOtherProfile(profile: OtherUserProfileDto) {
+        val key = "other_profile_${safeUserCacheKey(profile.userId)}"
+        dao.putKv(EncryptedKvEntity(key, vault.encryptString(otherProfileAdapter.toJson(profile))))
+    }
+
+    suspend fun fetchOtherProfile(userId: String): RepoResult<OtherUserProfileDto> {
+        return try {
+            val res = withAuthedApi { auth -> api.getOtherUserProfile(auth, userId) }
+                ?: return RepoResult.Failure(bridge.sanitizeError(401))
+            val body = res.body()
+            if (res.isSuccessful && body != null) {
+                cacheOtherProfile(body)
+                RepoResult.Success(body)
+            } else {
+                RepoResult.Failure(bridge.sanitizeError(res.code()))
+            }
+        } catch (_: Exception) {
+            RepoResult.Failure(bridge.sanitizeError(0))
+        }
+    }
+
+    suspend fun loadCachedOtherAvatarPath(userId: String): String? = withContext(Dispatchers.IO) {
+        val raw = dao.getKv("other_avatar_path_${safeUserCacheKey(userId)}") ?: return@withContext null
+        val path = runCatching { vault.decryptString(raw) }.getOrNull().orEmpty()
+        path.takeIf { it.isNotBlank() && File(it).exists() && File(it).length() > 0L }
+    }
+
+    suspend fun ensureOtherAvatarCachedLocally(userId: String, avatarFpHash: String): String? = withContext(Dispatchers.IO) {
+        val fp = avatarFpHash.trim()
+        if (fp.isEmpty()) return@withContext null
+        val userDir = File(otherMediaCacheDir, safeUserCacheKey(userId)).apply { mkdirs() }
+        val target = File(userDir, "avatar_${fp.take(32)}.jpg")
+        if (target.exists() && target.length() > 0L) {
+            dao.putKv(EncryptedKvEntity("other_avatar_path_${safeUserCacheKey(userId)}", vault.encryptString(target.absolutePath)))
+            return@withContext target.absolutePath
+        }
+        val res = runCatching {
+            withAuthedApi { auth -> api.downloadOtherUserAvatar(auth, userId) }
+        }.getOrNull()
+        val bytes = res?.takeIf { it.isSuccessful }?.body()?.bytes()
+        if (bytes != null && bytes.isNotEmpty()) {
+            userDir.listFiles()?.forEach { f ->
+                if (f.name.startsWith("avatar_") && f.name != target.name) f.delete()
+            }
+            target.writeBytes(bytes)
+            dao.putKv(EncryptedKvEntity("other_avatar_path_${safeUserCacheKey(userId)}", vault.encryptString(target.absolutePath)))
+            return@withContext target.absolutePath
+        }
+        loadCachedOtherAvatarPath(userId)
+    }
+
+    suspend fun loadCachedOtherBackgroundPaths(userId: String): List<String> = withContext(Dispatchers.IO) {
+        val raw = dao.getKv("other_bg_paths_${safeUserCacheKey(userId)}") ?: return@withContext emptyList()
+        val list = runCatching {
+            bgPathListAdapter.fromJson(vault.decryptString(raw))
+        }.getOrNull().orEmpty()
+        list.filter { File(it).exists() && File(it).length() > 0L }
+    }
+
+    suspend fun ensureOtherBackgroundsCachedLocally(userId: String, backgrounds: List<BackgroundPhotoDto>): List<String> = withContext(Dispatchers.IO) {
+        val userDir = File(otherMediaCacheDir, safeUserCacheKey(userId)).apply { mkdirs() }
+        val keepNames = mutableSetOf<String>()
+        val resultPaths = mutableListOf<String>()
+        for (bg in backgrounds.take(5)) {
+            val safeId = bg.id.replace(Regex("[^a-zA-Z0-9_-]"), "")
+            val safeHash = bg.fingerprintHash.take(24)
+            if (safeId.isBlank()) continue
+            val fileName = "bg_${safeId}_$safeHash.jpg"
+            keepNames.add(fileName)
+            val file = File(userDir, fileName)
+            if (!file.exists() || file.length() == 0L) {
+                val res = runCatching {
+                    withAuthedApi { auth -> api.downloadOtherUserBackgroundPhoto(auth, userId, bg.id) }
+                }.getOrNull()
+                val bytes = res?.takeIf { it.isSuccessful }?.body()?.bytes()
+                if (bytes != null && bytes.isNotEmpty()) {
+                    file.writeBytes(bytes)
+                }
+            }
+            if (file.exists() && file.length() > 0L) {
+                resultPaths.add(file.absolutePath)
+            }
+        }
+        userDir.listFiles()?.forEach { f ->
+            if (f.name.startsWith("bg_") && !keepNames.contains(f.name)) f.delete()
+        }
+        dao.putKv(
+            EncryptedKvEntity(
+                "other_bg_paths_${safeUserCacheKey(userId)}",
+                vault.encryptString(bgPathListAdapter.toJson(resultPaths))
+            )
+        )
+        resultPaths
+    }
+
+    suspend fun loadCachedOtherProfileItems(userId: String, tab: String): OwnerProfileItemsPageDto? {
+        val key = "other_items_${safeUserCacheKey(userId)}_${tab.lowercase()}"
+        val raw = dao.getKv(key) ?: return null
+        return runCatching { ownerItemsPageAdapter.fromJson(vault.decryptString(raw)) }.getOrNull()
+    }
+
+    suspend fun fetchOtherProfileItems(userId: String, tab: String, cursor: String = ""): RepoResult<OwnerProfileItemsPageDto> {
+        return try {
+            val normTab = tab.lowercase()
+            val res = withAuthedApi { auth -> api.getOtherUserItems(auth, userId, normTab, cursor, 24) }
+                ?: return RepoResult.Failure(bridge.sanitizeError(401))
+            val body = res.body()
+            if (res.isSuccessful && body != null) {
+                if (cursor.isBlank()) {
+                    val key = "other_items_${safeUserCacheKey(userId)}_$normTab"
+                    dao.putKv(EncryptedKvEntity(key, vault.encryptString(ownerItemsPageAdapter.toJson(body))))
+                }
+                RepoResult.Success(body)
+            } else {
+                RepoResult.Failure(bridge.sanitizeError(res.code()))
+            }
+        } catch (_: Exception) {
+            RepoResult.Failure(bridge.sanitizeError(0))
+        }
+    }
+
+    suspend fun fetchOtherUserConnections(userId: String, kind: String): RepoResult<List<ContactModel>> {
+        return try {
+            val res = withAuthedApi { auth -> api.getOtherUserConnections(auth, userId, kind) }
+                ?: return RepoResult.Failure(bridge.sanitizeError(401))
+            val body = res.body()
+            if (res.isSuccessful && body != null) {
+                val list = body.contacts.map { dto ->
+                    ContactModel(
+                        userId = dto.userId,
+                        fullName = dto.fullName,
+                        username = dto.username,
+                        location = dto.location,
+                        avatarFingerprintHash = dto.avatarFingerprintHash,
+                        isFollowing = dto.isFollowing,
+                        followsMe = dto.followsMe,
+                        relationship = bridge.computeRelationship(dto.isFollowing, dto.followsMe),
+                        riskScore = dto.riskScore
+                    )
+                }
+                RepoResult.Success(list)
+            } else {
+                RepoResult.Failure(bridge.sanitizeError(res.code()))
+            }
+        } catch (_: Exception) {
+            RepoResult.Failure(bridge.sanitizeError(0))
+        }
+    }
+
+    suspend fun setUserNickname(userId: String, nickname: String): RepoResult<String> {
+        return try {
+            val clean = nickname.trim().take(60)
+            val res = withAuthedApi { auth ->
+                if (clean.isEmpty()) api.deleteUserNickname(auth, userId)
+                else api.setUserNickname(auth, userId, SetUserNicknameRequest(clean))
+            } ?: return RepoResult.Failure(bridge.sanitizeError(401))
+            val body = res.body()
+            if (res.isSuccessful && body != null) {
+                val saved = body.nickname.trim()
+                val existingMap = loadCachedViewerNicknames().toMutableMap()
+                if (saved.isEmpty()) existingMap.remove(userId) else existingMap[userId] = saved
+                dao.putKv(
+                    EncryptedKvEntity(
+                        "viewer_nicknames_json",
+                        vault.encryptString(viewerNicknamesAdapter.toJson(ViewerNicknamesResponse(existingMap)))
+                    )
+                )
+                loadCachedOtherProfile(userId)?.let { cached ->
+                    cacheOtherProfile(cached.copy(nickname = saved))
+                }
+                RepoResult.Success(saved)
+            } else {
+                RepoResult.Failure(bridge.sanitizeError(res.code()))
+            }
+        } catch (_: Exception) {
+            RepoResult.Failure(bridge.sanitizeError(0))
+        }
+    }
+
+    suspend fun setUserBlocked(userId: String, blocked: Boolean): RepoResult<Boolean> {
+        return try {
+            val res = withAuthedApi { auth ->
+                if (blocked) api.blockUser(auth, userId) else api.unblockUser(auth, userId)
+            } ?: return RepoResult.Failure(bridge.sanitizeError(401))
+            if (res.isSuccessful) {
+                loadCachedOtherProfile(userId)?.let { cached ->
+                    cacheOtherProfile(
+                        cached.copy(
+                            isBlocked = blocked,
+                            isFollowing = if (blocked) false else cached.isFollowing
+                        )
+                    )
+                }
+                RepoResult.Success(blocked)
+            } else {
+                RepoResult.Failure(bridge.sanitizeError(res.code()))
+            }
+        } catch (_: Exception) {
+            RepoResult.Failure(bridge.sanitizeError(0))
+        }
+    }
+
+    suspend fun setUserMuted(userId: String, muted: Boolean): RepoResult<Boolean> {
+        return try {
+            val res = withAuthedApi { auth ->
+                if (muted) api.muteUser(auth, userId) else api.unmuteUser(auth, userId)
+            } ?: return RepoResult.Failure(bridge.sanitizeError(401))
+            if (res.isSuccessful) {
+                loadCachedOtherProfile(userId)?.let { cached ->
+                    cacheOtherProfile(cached.copy(isMuted = muted))
+                }
+                RepoResult.Success(muted)
+            } else {
+                RepoResult.Failure(bridge.sanitizeError(res.code()))
+            }
+        } catch (_: Exception) {
+            RepoResult.Failure(bridge.sanitizeError(0))
+        }
+    }
+
+    suspend fun submitUserReport(
+        userId: String,
+        category: String,
+        subReason: String,
+        details: String
+    ): RepoResult<Unit> {
+        return try {
+            val res = withAuthedApi { auth ->
+                api.submitUserReport(auth, userId, SubmitUserReportRequest(category, subReason, details))
+            } ?: return RepoResult.Failure(bridge.sanitizeError(401))
+            if (res.isSuccessful) {
+                RepoResult.Success(Unit)
+            } else {
+                RepoResult.Failure(bridge.sanitizeError(res.code()))
+            }
+        } catch (_: Exception) {
+            RepoResult.Failure(bridge.sanitizeError(0))
+        }
     }
 }

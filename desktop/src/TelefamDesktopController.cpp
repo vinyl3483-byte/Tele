@@ -147,7 +147,10 @@ TelefamDesktopController::TelefamDesktopController(QObject* parent)
         }
     }
 
+    initFeedSubsystem();
+    initOwnerProfileSubsystem();
     restoreSession();
+    restoreOwnerProfileCache();
 }
 
 TelefamDesktopController::~TelefamDesktopController() {
@@ -176,9 +179,13 @@ void TelefamDesktopController::selectTab(int tabIndex) {
     if (tabIndex == 1) {
         refreshContacts(true);
     } else if (tabIndex == 2) {
-        refreshFeedPosts();
+        if (activeFeedVideos().isEmpty()) {
+            refreshVideoFeed(videoFeedTab_, true);
+        } else {
+            prefetchUpcomingVideos(activeFeedVideos(), activeVideoIndex());
+        }
     } else if (tabIndex == 3) {
-        refreshMyProfile();
+        refreshOwnerProfile(false);
     }
 }
 
@@ -614,6 +621,7 @@ void TelefamDesktopController::cropAndUploadAvatar(const QUrl& fileUrl, qreal zo
     out.save(&buf, "JPEG", 90);
 
     avatarDataUrl_ = QStringLiteral("data:image/jpeg;base64,") + QString::fromLatin1(jpegBytes.toBase64());
+    saveOwnerAvatarBytesLocally(jpegBytes);
     emit avatarChanged();
 
     if (!isOffline_ && !accessToken_.isEmpty()) {
@@ -628,6 +636,15 @@ void TelefamDesktopController::cropAndUploadAvatar(const QUrl& fileUrl, qreal zo
             reply->deleteLater();
             if (status >= 200 && status < 300) {
                 avatarFingerprintHash_ = QJsonDocument::fromJson(data).object().value("avatar_fingerprint_hash").toString();
+                if (!myProfile_.isEmpty() && !avatarFingerprintHash_.isEmpty()) {
+                    myProfile_.insert("avatar_fingerprint_hash", avatarFingerprintHash_);
+                    const QByteArray bytes = QJsonDocument(QJsonObject::fromVariantMap(myProfile_)).toJson(QJsonDocument::Compact);
+                    telefam_vault_put(engine_, "my_profile_json",
+                                      reinterpret_cast<const uint8_t*>(bytes.constData()),
+                                      static_cast<size_t>(bytes.size()));
+                    emit myProfileChanged();
+                    emit ownerProfileChanged();
+                }
             }
         });
     }
@@ -690,9 +707,19 @@ void TelefamDesktopController::submitProfileSetup(
     }
 
     setLoading(true);
-    postJson(QStringLiteral("/v1/profile/setup"), reqObj, true, [this, fn](int status, const QByteArray&) {
+    postJson(QStringLiteral("/v1/profile/setup"), reqObj, true, [this, fn](int status, const QByteArray& raw) {
         setLoading(false);
         if (status >= 200 && status < 300) {
+            const auto obj = QJsonDocument::fromJson(raw).object();
+            if (!obj.isEmpty() && !obj.value("user_id").toString().isEmpty()) {
+                myProfile_ = obj.toVariantMap();
+                const QByteArray bytes = QJsonDocument(obj).toJson(QJsonDocument::Compact);
+                telefam_vault_put(engine_, "my_profile_json",
+                                  reinterpret_cast<const uint8_t*>(bytes.constData()),
+                                  static_cast<size_t>(bytes.size()));
+                emit myProfileChanged();
+                emit ownerProfileChanged();
+            }
             isEditingProfile_ = false;
             emit editingProfileChanged();
             lastSessionObj_.insert("profile_completed", true);
@@ -822,6 +849,8 @@ void TelefamDesktopController::refreshMyProfile() {
                               reinterpret_cast<const uint8_t*>(bytes.constData()),
                               static_cast<size_t>(bytes.size()));
             emit myProfileChanged();
+            syncOwnerMediaToLocalCache(obj);
+            emit ownerProfileChanged();
         }
     });
 }
@@ -934,6 +963,8 @@ void TelefamDesktopController::signOut() {
     telefam_vault_delete(engine_, "my_profile_json");
     telefam_vault_delete(engine_, "feed_cache_json");
     telefam_vault_delete(engine_, "notifications_json");
+    clearEncryptedVideoFeedCaches();
+    clearOwnerProfileCache();
     accessToken_.clear();
     refreshToken_.clear();
     userId_.clear();
@@ -1393,6 +1424,7 @@ void TelefamDesktopController::uploadDraftAndCreatePost(const QJsonObject& draft
                     postUploadStatus_ = QStringLiteral("uploaded");
                     postUploadProgress_ = 100;
                     emit postUploadChanged();
+                    refreshOwnerProfile(false);
                     QTimer::singleShot(700, this, [this]() { closePostComposer(); });
                 }
             } else if (status == 0) {
@@ -1707,6 +1739,7 @@ void TelefamDesktopController::restoreSession() {
             emit myProfileChanged();
         }
     }
+    restoreEncryptedVideoFeedCaches();
 }
 
 void TelefamDesktopController::refreshSessionAndThen(std::function<void(bool)> done) {

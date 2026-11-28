@@ -415,7 +415,7 @@ private struct RoundedRectangleShapeCompat: Shape {
     }
 }
 
-private struct PhotoCropSheet: View {
+struct PhotoCropSheet: View {
     let source: UIImage
     let brandRed: Color
     let onApply: (Data) -> Void

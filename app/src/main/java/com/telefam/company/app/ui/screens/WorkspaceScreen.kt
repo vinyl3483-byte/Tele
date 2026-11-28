@@ -96,9 +96,14 @@ import com.telefam.company.app.network.AuthSessionDto
 import com.telefam.company.app.network.MyProfileDto
 import com.telefam.company.app.network.NotificationDto
 import com.telefam.company.app.network.TelefamNetworkClient
+import android.graphics.Bitmap
+import android.net.Uri
+import com.telefam.company.app.network.OwnerProfileItemDto
 import com.telefam.company.app.ui.ContactFilter
 import com.telefam.company.app.ui.FeedController
 import com.telefam.company.app.ui.HomeTab
+import com.telefam.company.app.ui.OwnerProfileTab
+import com.telefam.company.app.ui.OwnerProfileUiState
 import com.telefam.company.app.ui.VideoFeedUiState
 import com.telefam.company.app.ui.components.swipeBackEdge
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -119,6 +124,7 @@ fun WorkspaceScreen(
     hasMoreContacts: Boolean,
     contactsToastMessage: String?,
     myProfile: MyProfileDto?,
+    ownerProfileState: OwnerProfileUiState,
     videoFeedState: VideoFeedUiState,
     feedPlaybackState: FeedPlaybackState,
     feedController: FeedController,
@@ -135,12 +141,28 @@ fun WorkspaceScreen(
     onToggleFollow: (ContactModel) -> Unit,
     onLoadMoreContacts: () -> Unit,
     onClearContactsToast: () -> Unit,
+    onAvatarCropped: (Bitmap) -> Unit,
+    onUploadBackgroundPhotos: (List<Uri>) -> Unit,
+    onDeleteBackgroundPhoto: (String) -> Unit,
+    onSelectOwnerCategory: (OwnerProfileTab) -> Unit,
+    onRefreshOwnerProfile: () -> Unit,
+    onOpenConnections: (String) -> Unit,
+    onCloseConnections: () -> Unit,
+    onToggleConnectionFollow: (ContactModel) -> Unit,
+    onOpenOwnerItem: (OwnerProfileItemDto) -> Unit,
+    onCloseOwnerItemViewer: () -> Unit,
+    onToggleOwnerPostLike: (OwnerProfileItemDto) -> Unit,
+    onToggleOwnerPostSave: (OwnerProfileItemDto) -> Unit,
+    onToggleOwnerPostLock: (OwnerProfileItemDto) -> Unit,
+    onShowOwnerToast: (String) -> Unit,
+    onClearOwnerToast: () -> Unit,
     onOpenPost: () -> Unit,
     onOpenNotifications: () -> Unit,
     onMarkNotificationsRead: () -> Unit,
     onSyncNow: () -> Unit,
     onEditProfile: () -> Unit,
-    onSignOut: () -> Unit
+    onSignOut: () -> Unit,
+    onOpenUserProfile: (String) -> Unit = {}
 ) {
     var showNewChatDialog by remember { mutableStateOf(false) }
     var showNotificationsDialog by remember { mutableStateOf(false) }
@@ -160,6 +182,15 @@ fun WorkspaceScreen(
         }
     }
 
+    LaunchedEffect(ownerProfileState.toastMessage) {
+        val msg = ownerProfileState.toastMessage
+        if (!msg.isNullOrBlank()) {
+            snackbarHostState.currentSnackbarData?.dismiss()
+            snackbarHostState.showSnackbar(msg)
+            onClearOwnerToast()
+        }
+    }
+
     val filteredConversations = remember(conversations, homeSearchQuery) {
         val q = homeSearchQuery.trim().lowercase()
         if (q.isEmpty()) conversations else conversations.filter { it.title.lowercase().contains(q) }
@@ -172,10 +203,17 @@ fun WorkspaceScreen(
     }
 
     val isImmersiveFeed = activeTab == HomeTab.FEEDS
+    val isEdgeToEdgeProfile = activeTab == HomeTab.PROFILE
     val rootModifier = Modifier
         .fillMaxSize()
-        .background(if (isImmersiveFeed) Color.Black else MaterialTheme.colorScheme.primary)
-        .let { m -> if (isImmersiveFeed) m else m.windowInsetsPadding(WindowInsets.statusBars) }
+        .background(
+            when {
+                isImmersiveFeed -> Color.Black
+                isEdgeToEdgeProfile -> MaterialTheme.colorScheme.background
+                else -> MaterialTheme.colorScheme.primary
+            }
+        )
+        .let { m -> if (isImmersiveFeed || isEdgeToEdgeProfile) m else m.windowInsetsPadding(WindowInsets.statusBars) }
         .windowInsetsPadding(WindowInsets.navigationBars)
 
     Box(modifier = rootModifier) {
@@ -185,7 +223,7 @@ fun WorkspaceScreen(
             Box(modifier = Modifier.fillMaxSize()) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     when (activeTab) {
-                        HomeTab.FEEDS -> Unit
+                        HomeTab.FEEDS, HomeTab.PROFILE -> Unit
                         HomeTab.CONTACTS -> {
                             ContactsTopBar(
                                 isDarkTheme = isDarkTheme,
@@ -226,7 +264,7 @@ fun WorkspaceScreen(
                         }
                     }
 
-                    val bodyShape = if (activeTab == HomeTab.CONTACTS || isImmersiveFeed) {
+                    val bodyShape = if (activeTab == HomeTab.CONTACTS || isImmersiveFeed || isEdgeToEdgeProfile) {
                         RoundedCornerShape(0.dp)
                     } else {
                         RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
@@ -272,6 +310,7 @@ fun WorkspaceScreen(
                                             isLoading = isLoadingContacts,
                                             hasMore = hasMoreContacts,
                                             onToggleFollow = onToggleFollow,
+                                            onOpenProfile = { contact -> onOpenUserProfile(contact.userId) },
                                             onLoadMore = onLoadMoreContacts,
                                             onBottomBarVisibilityChange = { isBottomBarVisible = it }
                                         )
@@ -293,17 +332,32 @@ fun WorkspaceScreen(
 
                                     HomeTab.PROFILE -> {
                                         BackHandler { onSelectTab(HomeTab.CHATS) }
-                                        ProfileOverviewContent(
+                                        OwnerProfileScreen(
                                             modifier = Modifier
                                                 .weight(1f)
                                                 .fillMaxHeight(),
+                                            isDarkTheme = isDarkTheme,
                                             session = session,
                                             profile = myProfile,
-                                            feedState = videoFeedState,
-                                            feedController = feedController,
+                                            ownerState = ownerProfileState,
+                                            bottomNavInsetPadding = 16.dp,
                                             onEditProfile = onEditProfile,
-                                            onSyncNow = onSyncNow,
-                                            onSignOut = onSignOut
+                                            onAvatarCropped = onAvatarCropped,
+                                            onUploadBackgroundPhotos = onUploadBackgroundPhotos,
+                                            onDeleteBackgroundPhoto = onDeleteBackgroundPhoto,
+                                            onSelectCategory = onSelectOwnerCategory,
+                                            onPullRefresh = onRefreshOwnerProfile,
+                                            onOpenConnections = onOpenConnections,
+                                            onCloseConnections = onCloseConnections,
+                                            onToggleConnectionFollow = onToggleConnectionFollow,
+                                            onOpenItem = onOpenOwnerItem,
+                                            onCloseItemViewer = onCloseOwnerItemViewer,
+                                            onTogglePostLike = onToggleOwnerPostLike,
+                                            onTogglePostSave = onToggleOwnerPostSave,
+                                            onTogglePostLock = onToggleOwnerPostLock,
+                                            onShowToast = onShowOwnerToast,
+                                            onBottomBarVisibilityChange = { isBottomBarVisible = it },
+                                            onOpenUserProfile = onOpenUserProfile
                                         )
                                     }
 
@@ -372,6 +426,7 @@ fun WorkspaceScreen(
                                         isLoading = isLoadingContacts,
                                         hasMore = hasMoreContacts,
                                         onToggleFollow = onToggleFollow,
+                                        onOpenProfile = { contact -> onOpenUserProfile(contact.userId) },
                                         onLoadMore = onLoadMoreContacts,
                                         onBottomBarVisibilityChange = { isBottomBarVisible = it }
                                     )
@@ -391,17 +446,32 @@ fun WorkspaceScreen(
 
                                 HomeTab.PROFILE -> {
                                     BackHandler { onSelectTab(HomeTab.CHATS) }
-                                    ProfileOverviewContent(
+                                    OwnerProfileScreen(
                                         modifier = Modifier
                                             .fillMaxSize()
                                             .swipeBackEdge { onSelectTab(HomeTab.CHATS) },
+                                        isDarkTheme = isDarkTheme,
                                         session = session,
                                         profile = myProfile,
-                                        feedState = videoFeedState,
-                                        feedController = feedController,
+                                        ownerState = ownerProfileState,
+                                        bottomNavInsetPadding = 74.dp,
                                         onEditProfile = onEditProfile,
-                                        onSyncNow = onSyncNow,
-                                        onSignOut = onSignOut
+                                        onAvatarCropped = onAvatarCropped,
+                                        onUploadBackgroundPhotos = onUploadBackgroundPhotos,
+                                        onDeleteBackgroundPhoto = onDeleteBackgroundPhoto,
+                                        onSelectCategory = onSelectOwnerCategory,
+                                        onPullRefresh = onRefreshOwnerProfile,
+                                        onOpenConnections = onOpenConnections,
+                                        onCloseConnections = onCloseConnections,
+                                        onToggleConnectionFollow = onToggleConnectionFollow,
+                                        onOpenItem = onOpenOwnerItem,
+                                        onCloseItemViewer = onCloseOwnerItemViewer,
+                                        onTogglePostLike = onToggleOwnerPostLike,
+                                        onTogglePostSave = onToggleOwnerPostSave,
+                                        onTogglePostLock = onToggleOwnerPostLock,
+                                        onShowToast = onShowOwnerToast,
+                                        onBottomBarVisibilityChange = { isBottomBarVisible = it },
+                                        onOpenUserProfile = onOpenUserProfile
                                     )
                                 }
 
@@ -1050,313 +1120,6 @@ private fun HomeNavigationRail(
             onClick = onProfileClick,
             modifier = Modifier.testTag("rail_profile_tab")
         )
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ProfileOverviewContent(
-    modifier: Modifier,
-    session: AuthSessionDto,
-    profile: MyProfileDto?,
-    feedState: VideoFeedUiState,
-    feedController: FeedController,
-    onEditProfile: () -> Unit,
-    onSyncNow: () -> Unit,
-    onSignOut: () -> Unit
-) {
-    val displayName = profile?.fullName?.takeIf { it.isNotBlank() } ?: session.displayName
-    val username = profile?.username.orEmpty()
-    val email = profile?.email?.takeIf { it.isNotBlank() } ?: session.email
-    var showSavedSheet by remember { mutableStateOf(false) }
-    var showSafetySheet by remember { mutableStateOf(false) }
-    val safety = feedState.profileSavedAndSafety
-
-    LazyColumn(
-        modifier = modifier
-            .background(MaterialTheme.colorScheme.background)
-            .padding(horizontal = 20.dp),
-        contentPadding = PaddingValues(top = 24.dp, bottom = 96.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        item {
-            Column(
-                modifier = Modifier.widthIn(max = 460.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(84.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = displayName.ifBlank { "T" }.take(2).uppercase(),
-                        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-                Spacer(modifier = Modifier.height(14.dp))
-                Text(
-                    text = displayName.ifBlank { "Telefam" },
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                if (username.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "@$username",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-                if (email.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = email,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                if (!profile?.bio.isNullOrBlank()) {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = profile!!.bio,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        textAlign = TextAlign.Center
-                    )
-                }
-                if (!profile?.location.isNullOrBlank()) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = profile!!.location,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(24.dp))
-                Button(
-                    onClick = onEditProfile,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = Color.White
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                        .testTag("profile_edit_button")
-                ) {
-                    Text(stringResource(id = R.string.action_edit_profile))
-                }
-                Spacer(modifier = Modifier.height(10.dp))
-                OutlinedButton(
-                    onClick = {
-                        feedController.refreshSavedVideos()
-                        showSavedSheet = true
-                    },
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                        .testTag("profile_saved_videos_button")
-                ) {
-                    Text("${stringResource(id = R.string.feed_saved_videos_title)} (${safety.savedVideos.size})")
-                }
-                Spacer(modifier = Modifier.height(10.dp))
-                OutlinedButton(
-                    onClick = {
-                        feedController.refreshSafetyPreferences()
-                        showSafetySheet = true
-                    },
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                        .testTag("profile_safety_button")
-                ) {
-                    val totalRestricted = safety.mutedUsers.size + safety.blockedUsers.size
-                    Text("${stringResource(id = R.string.feed_safety_title)} ($totalRestricted)")
-                }
-                Spacer(modifier = Modifier.height(10.dp))
-                OutlinedButton(
-                    onClick = onSyncNow,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                ) {
-                    Text(stringResource(id = R.string.action_sync))
-                }
-                Spacer(modifier = Modifier.height(10.dp))
-                OutlinedButton(
-                    onClick = onSignOut,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                        .testTag("profile_sign_out_button")
-                ) {
-                    Text(stringResource(id = R.string.action_sign_out))
-                }
-            }
-        }
-    }
-
-    if (showSavedSheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showSavedSheet = false },
-            containerColor = Color(0xFF15171C),
-            contentColor = Color.White,
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 240.dp, max = 540.dp)
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
-            ) {
-                Text(
-                    text = stringResource(id = R.string.feed_saved_videos_title),
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                if (safety.isLoadingSaved && safety.savedVideos.isEmpty()) {
-                    Box(modifier = Modifier.fillMaxWidth().height(160.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                    }
-                } else if (safety.savedVideos.isEmpty()) {
-                    Box(modifier = Modifier.fillMaxWidth().height(140.dp), contentAlignment = Alignment.Center) {
-                        Text(
-                            text = stringResource(id = R.string.feed_empty_for_you),
-                            color = Color.White.copy(alpha = 0.65f)
-                        )
-                    }
-                } else {
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(3),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        itemsIndexed(safety.savedVideos, key = { _, v -> v.videoId }) { idx, video ->
-                            val thumb = TelefamNetworkClient.resolveMediaUrl(video.thumbnailUrl)
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(140.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(Color(0xFF23262F))
-                                    .clickable {
-                                        showSavedSheet = false
-                                        feedController.openModalFeedPlayer(
-                                            "Saved Videos",
-                                            safety.savedVideos,
-                                            idx
-                                        )
-                                    }
-                            ) {
-                                if (thumb.isNotBlank()) {
-                                    AsyncImage(
-                                        model = thumb,
-                                        contentDescription = video.title,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                }
-                                Text(
-                                    text = FeedFormatter.formatCount(video.viewsCount),
-                                    color = Color.White,
-                                    fontSize = 11.sp,
-                                    modifier = Modifier
-                                        .align(Alignment.BottomStart)
-                                        .background(Color.Black.copy(alpha = 0.55f))
-                                        .padding(horizontal = 6.dp, vertical = 3.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (showSafetySheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showSafetySheet = false },
-            containerColor = Color(0xFF15171C),
-            contentColor = Color.White,
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        ) {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 200.dp, max = 500.dp)
-                    .padding(horizontal = 18.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                item {
-                    Text(
-                        text = stringResource(id = R.string.feed_safety_title),
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                }
-                if (safety.mutedUsers.isEmpty() && safety.blockedUsers.isEmpty()) {
-                    item {
-                        Text(
-                            text = stringResource(id = R.string.feed_search_empty),
-                            color = Color.White.copy(alpha = 0.65f),
-                            modifier = Modifier.padding(vertical = 18.dp)
-                        )
-                    }
-                }
-                items(safety.mutedUsers, key = { "muted_${it.userId}" }) { user ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color(0xFF1E222B))
-                            .padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(user.fullName.ifBlank { user.username }, color = Color.White, fontWeight = FontWeight.SemiBold)
-                            Text("@${user.username}", color = Color.White.copy(alpha = 0.65f), fontSize = 12.sp)
-                        }
-                        TextButton(onClick = { feedController.unmuteUser(user.userId) }) {
-                            Text(stringResource(id = R.string.feed_unmute), color = MaterialTheme.colorScheme.primary)
-                        }
-                    }
-                }
-                items(safety.blockedUsers, key = { "blocked_${it.userId}" }) { user ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color(0xFF1E222B))
-                            .padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(user.fullName.ifBlank { user.username }, color = Color.White, fontWeight = FontWeight.SemiBold)
-                            Text("@${user.username}", color = Color.White.copy(alpha = 0.65f), fontSize = 12.sp)
-                        }
-                        TextButton(onClick = { feedController.unblockUser(user.userId) }) {
-                            Text(stringResource(id = R.string.feed_unblock), color = MaterialTheme.colorScheme.primary)
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 

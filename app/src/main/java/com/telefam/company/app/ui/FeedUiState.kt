@@ -113,6 +113,7 @@ data class VideoFeedUiState(
     val confirmBlockVideo: FeedVideoDto? = null,
     val confirmDeleteVideo: FeedVideoDto? = null,
     val toastMessage: String? = null,
+    val viewerNicknames: Map<String, String> = emptyMap(),
     val profileSavedAndSafety: ProfileSavedAndSafetyState = ProfileSavedAndSafetyState()
 ) {
     val activeChannel: FeedChannelState

@@ -113,6 +113,23 @@ func (s *Service) ListContacts(
 
 	var matched []ContactDTO
 	err := db.WithUserRLS(ctx, s.pool, viewerID, func(tx pgx.Tx) error {
+		nicknames := make(map[uuid.UUID]string)
+		if nRows, nErr := tx.Query(ctx, `SELECT target_user_id, nickname_encrypted FROM user_nicknames WHERE owner_id = $1`, viewerID); nErr == nil {
+			for nRows.Next() {
+				var tid uuid.UUID
+				var encNick []byte
+				if nRows.Scan(&tid, &encNick) == nil {
+					if nb, dErr := security.DecryptAtRest(s.cfg.MasterKey, encNick, "user_nicknames.nickname"); dErr == nil {
+						val := strings.TrimSpace(string(nb))
+						if val != "" {
+							nicknames[tid] = val
+						}
+					}
+				}
+			}
+			nRows.Close()
+		}
+
 		rows, err := tx.Query(ctx, `
 			SELECT user_id, full_name_encrypted, username_encrypted, location_encrypted,
 			       COALESCE(avatar_fingerprint_hash, ''), is_following, follows_me, risk_score
@@ -140,6 +157,9 @@ func (s *Service) ListContacts(
 			}
 
 			fullName := string(fullNameBytes)
+			if nick, ok := nicknames[uid]; ok && nick != "" {
+				fullName = nick
+			}
 			username := string(usernameBytes)
 			location := string(locBytes)
 			rel := ComputeRelationship(isFollowing, followsMe)

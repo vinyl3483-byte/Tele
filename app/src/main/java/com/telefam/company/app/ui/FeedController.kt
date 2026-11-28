@@ -24,7 +24,8 @@ class FeedController(
     val playerController: FeedPlayerController,
     private val networkQualityProvider: () -> NetworkQuality,
     private val onContactsChanged: () -> Unit,
-    private val onUseAudioInPost: (AudioSummaryDto) -> Unit
+    private val onUseAudioInPost: (AudioSummaryDto) -> Unit,
+    private val onOpenUserProfile: (String) -> Unit = {}
 ) {
     private val _state = MutableStateFlow(VideoFeedUiState())
     val state: StateFlow<VideoFeedUiState> = _state.asStateFlow()
@@ -68,6 +69,16 @@ class FeedController(
                 )
             }
         }
+    }
+
+    fun updateViewerNicknames(nicknames: Map<String, String>) {
+        _state.update { it.copy(viewerNicknames = nicknames) }
+    }
+
+    fun openCreatorProfile(userId: String) {
+        if (userId.isBlank()) return
+        playerController.pause()
+        onOpenUserProfile(userId)
     }
 
     fun loadInitialFromCacheAndRefresh(isLoggedIn: Boolean) {

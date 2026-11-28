@@ -32,5 +32,28 @@
     <file>icons/ic_image_theme.svg</file>
     <file>icons/ic_chevron_right.svg</file>
     <file>icons/ic_check.svg</file>
+    <file>icons/ic_live_tv.svg</file>
+    <file>icons/ic_heart_white.svg</file>
+    <file>icons/ic_heart_red.svg</file>
+    <file>icons/ic_feed_comment.svg</file>
+    <file>icons/ic_feed_share_red.svg</file>
+    <file>icons/ic_feed_share_white.svg</file>
+    <file>icons/ic_bookmark_red.svg</file>
+    <file>icons/ic_bookmark_filled.svg</file>
+    <file>icons/ic_more_horiz.svg</file>
+    <file>icons/ic_equalizer.svg</file>
+    <file>icons/ic_repost.svg</file>
+    <file>icons/ic_block.svg</file>
+    <file>icons/ic_flag_report.svg</file>
+    <file>icons/ic_edit_white.svg</file>
+    <file>icons/ic_lock_white.svg</file>
+    <file>icons/ic_visibility_white.svg</file>
+    <file>icons/ic_trash_red.svg</file>
+    <file>icons/ic_chevron_up_white.svg</file>
+    <file>icons/ic_chevron_down_white.svg</file>
+    <file>icons/ic_menu_dashes.svg</file>
+    <file>icons/ic_settings.svg</file>
+    <file>icons/ic_grid_posts.svg</file>
+    <file>icons/ic_bookmark_outline.svg</file>
   </qresource>
 </RCC>

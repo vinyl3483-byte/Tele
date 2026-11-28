@@ -37,6 +37,7 @@ import com.telefam.company.app.ui.screens.FeedModalPlayerScreen
 import com.telefam.company.app.ui.screens.FeedSearchScreen
 import com.telefam.company.app.ui.screens.HashtagDiscoveryScreen
 import com.telefam.company.app.ui.screens.LiveComingSoonScreen
+import com.telefam.company.app.ui.screens.OtherProfileScreen
 import com.telefam.company.app.ui.screens.PostCreatorScreen
 import com.telefam.company.app.ui.screens.ProfileSetupScreen
 import com.telefam.company.app.ui.screens.WorkspaceScreen
@@ -194,6 +195,7 @@ class MainActivity : ComponentActivity() {
                                 hasMoreContacts = state.hasMoreContacts,
                                 contactsToastMessage = state.contactsToastMessage,
                                 myProfile = state.myProfile,
+                                ownerProfileState = state.ownerProfile,
                                 videoFeedState = videoFeedState,
                                 feedPlaybackState = feedPlaybackState,
                                 feedController = viewModel.feedController,
@@ -210,73 +212,128 @@ class MainActivity : ComponentActivity() {
                                 onToggleFollow = viewModel::toggleFollow,
                                 onLoadMoreContacts = viewModel::loadMoreContacts,
                                 onClearContactsToast = viewModel::clearContactsToast,
+                                onAvatarCropped = viewModel::setCroppedAvatar,
+                                onUploadBackgroundPhotos = viewModel::uploadOwnerBackgroundPhotos,
+                                onDeleteBackgroundPhoto = viewModel::deleteOwnerBackgroundPhoto,
+                                onSelectOwnerCategory = viewModel::selectOwnerProfileCategory,
+                                onRefreshOwnerProfile = { viewModel.refreshOwnerProfile(isPullGesture = true) },
+                                onOpenConnections = viewModel::openConnectionsSheet,
+                                onCloseConnections = viewModel::closeConnectionsSheet,
+                                onToggleConnectionFollow = viewModel::toggleConnectionFollow,
+                                onOpenOwnerItem = viewModel::openOwnerItemViewer,
+                                onCloseOwnerItemViewer = viewModel::closeOwnerItemViewer,
+                                onToggleOwnerPostLike = viewModel::toggleOwnerPostLike,
+                                onToggleOwnerPostSave = viewModel::toggleOwnerPostSave,
+                                onToggleOwnerPostLock = viewModel::toggleOwnerPostLock,
+                                onShowOwnerToast = viewModel::showOwnerProfileToast,
+                                onClearOwnerToast = viewModel::clearOwnerProfileToast,
                                 onOpenPost = viewModel::openPostComposer,
                                 onOpenNotifications = viewModel::refreshNotifications,
                                 onMarkNotificationsRead = viewModel::markNotificationsRead,
                                 onSyncNow = viewModel::syncNow,
                                 onEditProfile = viewModel::openEditProfile,
-                                onSignOut = viewModel::signOut
+                                onSignOut = viewModel::signOut,
+                                onOpenUserProfile = viewModel::openUserProfile
                             )
 
-                            when {
-                                videoFeedState.modalPlayer.isOpen -> {
-                                    FeedModalPlayerScreen(
-                                        state = videoFeedState.modalPlayer,
-                                        playbackState = feedPlaybackState,
-                                        feedController = viewModel.feedController,
-                                        onClose = { viewModel.feedController.closeModalFeedPlayer() }
-                                    )
-                                }
-
-                                videoFeedState.audioDiscovery.isOpen -> {
-                                    AudioDiscoveryScreen(
-                                        state = videoFeedState.audioDiscovery,
-                                        feedController = viewModel.feedController,
-                                        onClose = {
-                                            viewModel.feedController.closeAudioDiscovery()
-                                            if (state.activeTab == HomeTab.FEEDS && !videoFeedState.search.isOpen) {
-                                                viewModel.feedController.playActiveFeedVideoIfAvailable()
-                                            }
+                            if (videoFeedState.isLiveScreenOpen) {
+                                LiveComingSoonScreen(
+                                    onClose = {
+                                        viewModel.feedController.closeLiveScreen()
+                                        if (state.activeTab == HomeTab.FEEDS && state.otherProfile.stack.isEmpty()) {
+                                            viewModel.feedController.playActiveFeedVideoIfAvailable()
                                         }
-                                    )
-                                }
+                                    }
+                                )
+                            }
 
-                                videoFeedState.hashtagDiscovery.isOpen -> {
-                                    HashtagDiscoveryScreen(
-                                        state = videoFeedState.hashtagDiscovery,
-                                        feedController = viewModel.feedController,
-                                        onClose = {
-                                            viewModel.feedController.closeHashtagDiscovery()
-                                            if (state.activeTab == HomeTab.FEEDS && !videoFeedState.search.isOpen) {
-                                                viewModel.feedController.playActiveFeedVideoIfAvailable()
-                                            }
+                            if (videoFeedState.search.isOpen) {
+                                FeedSearchScreen(
+                                    state = videoFeedState.search,
+                                    feedController = viewModel.feedController,
+                                    viewerNicknames = state.otherProfile.viewerNicknames,
+                                    onClose = {
+                                        viewModel.feedController.closeSearch()
+                                        if (state.activeTab == HomeTab.FEEDS && state.otherProfile.stack.isEmpty()) {
+                                            viewModel.feedController.playActiveFeedVideoIfAvailable()
                                         }
-                                    )
-                                }
+                                    }
+                                )
+                            }
 
-                                videoFeedState.search.isOpen -> {
-                                    FeedSearchScreen(
-                                        state = videoFeedState.search,
-                                        feedController = viewModel.feedController,
-                                        onClose = {
-                                            viewModel.feedController.closeSearch()
-                                            if (state.activeTab == HomeTab.FEEDS) {
-                                                viewModel.feedController.playActiveFeedVideoIfAvailable()
-                                            }
-                                        }
-                                    )
-                                }
+                            state.otherProfile.top?.let { topOther ->
+                                OtherProfileScreen(
+                                    isDarkTheme = state.isDarkTheme,
+                                    instance = topOther,
+                                    reportSheet = state.otherProfile.reportSheet,
+                                    toastMessage = state.otherProfile.toastMessage,
+                                    onBack = viewModel::closeTopOtherProfile,
+                                    onPullRefresh = { viewModel.refreshOtherProfile(isPullGesture = true) },
+                                    onToggleFollow = viewModel::toggleOtherProfileFollow,
+                                    onSelectCategory = viewModel::selectOtherProfileCategory,
+                                    onOpenConnections = viewModel::openOtherProfileConnections,
+                                    onCloseConnections = viewModel::closeOtherProfileConnections,
+                                    onToggleConnectionFollow = viewModel::toggleOtherConnectionFollow,
+                                    onOpenUserProfile = viewModel::openUserProfile,
+                                    onSetNickname = viewModel::setOtherUserNickname,
+                                    onToggleBlock = viewModel::toggleOtherUserBlock,
+                                    onToggleMute = viewModel::toggleOtherUserMute,
+                                    onOpenReport = viewModel::openOtherReportSheet,
+                                    onSelectReportCategory = viewModel::selectOtherReportCategory,
+                                    onSelectReportSubReason = viewModel::selectOtherReportSubReason,
+                                    onUpdateReportDetails = viewModel::updateOtherReportDetails,
+                                    onBackReportStep = viewModel::backOtherReportStep,
+                                    onSubmitReport = viewModel::submitOtherReport,
+                                    onCloseReportSheet = viewModel::closeOtherReportSheet,
+                                    onOpenItem = viewModel::openOtherProfileItem,
+                                    onCloseItemViewer = viewModel::closeOtherProfileItemViewer,
+                                    onTogglePostLike = viewModel::toggleOtherPostLike,
+                                    onTogglePostSave = viewModel::toggleOtherPostSave,
+                                    onShowToast = viewModel::showOtherProfileToast,
+                                    onClearToast = viewModel::clearOtherProfileToast
+                                )
+                            }
 
-                                videoFeedState.isLiveScreenOpen -> {
-                                    LiveComingSoonScreen(
-                                        onClose = {
-                                            viewModel.feedController.closeLiveScreen()
-                                            if (state.activeTab == HomeTab.FEEDS) {
-                                                viewModel.feedController.playActiveFeedVideoIfAvailable()
-                                            }
+                            if (videoFeedState.hashtagDiscovery.isOpen) {
+                                HashtagDiscoveryScreen(
+                                    state = videoFeedState.hashtagDiscovery,
+                                    feedController = viewModel.feedController,
+                                    onClose = {
+                                        viewModel.feedController.closeHashtagDiscovery()
+                                        if (state.activeTab == HomeTab.FEEDS &&
+                                            !videoFeedState.search.isOpen &&
+                                            state.otherProfile.stack.isEmpty()
+                                        ) {
+                                            viewModel.feedController.playActiveFeedVideoIfAvailable()
                                         }
-                                    )
-                                }
+                                    }
+                                )
+                            }
+
+                            if (videoFeedState.audioDiscovery.isOpen) {
+                                AudioDiscoveryScreen(
+                                    state = videoFeedState.audioDiscovery,
+                                    feedController = viewModel.feedController,
+                                    onClose = {
+                                        viewModel.feedController.closeAudioDiscovery()
+                                        if (state.activeTab == HomeTab.FEEDS &&
+                                            !videoFeedState.search.isOpen &&
+                                            state.otherProfile.stack.isEmpty()
+                                        ) {
+                                            viewModel.feedController.playActiveFeedVideoIfAvailable()
+                                        }
+                                    }
+                                )
+                            }
+
+                            if (videoFeedState.modalPlayer.isOpen) {
+                                FeedModalPlayerScreen(
+                                    state = videoFeedState.modalPlayer,
+                                    playbackState = feedPlaybackState,
+                                    feedController = viewModel.feedController,
+                                    viewerNicknames = state.otherProfile.viewerNicknames,
+                                    onClose = { viewModel.feedController.closeModalFeedPlayer() }
+                                )
                             }
                         }
                     }

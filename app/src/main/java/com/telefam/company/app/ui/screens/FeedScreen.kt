@@ -213,6 +213,7 @@ fun FeedScreen(
 
                     FeedVideoPageItem(
                         video = video,
+                        creatorDisplayOverride = feedState.viewerNicknames[video.creatorId].orEmpty(),
                         isActive = isCurrent,
                         player = if (isCurrent) feedController.playerController.playerInstance else null,
                         playbackState = playbackState,
@@ -220,6 +221,7 @@ fun FeedScreen(
                         onSingleTap = { feedController.playerController.togglePlayPause() },
                         onDoubleTapLike = { feedController.onDoubleTapLike(video) },
                         onRetry = { feedController.retryActiveVideo() },
+                        onCreatorClick = { feedController.openCreatorProfile(video.creatorId) },
                         onToggleFollow = { feedController.toggleFollowCreator(video) },
                         onToggleLike = { feedController.toggleLike(video) },
                         onOpenComments = { feedController.openComments(video) },
@@ -456,6 +458,7 @@ private fun FeedHeaderTabLabel(
 @Composable
 fun FeedVideoPageItem(
     video: FeedVideoDto,
+    creatorDisplayOverride: String = "",
     isActive: Boolean,
     player: Any?,
     playbackState: FeedPlaybackState,
@@ -463,6 +466,7 @@ fun FeedVideoPageItem(
     onSingleTap: () -> Unit,
     onDoubleTapLike: () -> Unit,
     onRetry: () -> Unit,
+    onCreatorClick: () -> Unit = {},
     onToggleFollow: () -> Unit,
     onToggleLike: () -> Unit,
     onOpenComments: () -> Unit,
@@ -565,7 +569,8 @@ fun FeedVideoPageItem(
                 }
             }
 
-            val handle = video.creatorUsername.ifBlank { video.creatorName }
+            val baseHandle = video.creatorUsername.ifBlank { video.creatorName }
+            val handle = creatorDisplayOverride.trim().ifBlank { baseHandle }
             if (handle.isNotBlank()) {
                 Text(
                     text = handle,
@@ -573,7 +578,12 @@ fun FeedVideoPageItem(
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable(onClick = onCreatorClick)
+                        .padding(vertical = 2.dp)
+                        .testTag("feed_creator_name_${video.videoId}")
                 )
             }
 
@@ -651,10 +661,13 @@ fun FeedVideoPageItem(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             CreatorAvatarFollowButton(
-                creatorName = video.creatorName.ifBlank { video.creatorUsername },
+                creatorName = creatorDisplayOverride.trim().ifBlank {
+                    video.creatorName.ifBlank { video.creatorUsername }
+                },
                 avatarHash = video.creatorAvatarHash,
                 showFollowPlus = !video.isOwner && !video.isFollowingCreator,
-                onClick = onToggleFollow
+                onAvatarClick = onCreatorClick,
+                onFollowClick = onToggleFollow
             )
 
             FeedActionIconButton(
@@ -737,13 +750,11 @@ private fun CreatorAvatarFollowButton(
     creatorName: String,
     avatarHash: String,
     showFollowPlus: Boolean,
-    onClick: () -> Unit
+    onAvatarClick: () -> Unit,
+    onFollowClick: () -> Unit
 ) {
     Box(
-        modifier = Modifier
-            .size(52.dp)
-            .clickable(enabled = showFollowPlus, onClick = onClick)
-            .testTag("feed_creator_follow_button"),
+        modifier = Modifier.size(54.dp),
         contentAlignment = Alignment.TopCenter
     ) {
         Box(
@@ -751,7 +762,9 @@ private fun CreatorAvatarFollowButton(
                 .size(46.dp)
                 .clip(CircleShape)
                 .border(1.5.dp, Color.White, CircleShape)
-                .background(Color(0xFF23262F)),
+                .background(Color(0xFF23262F))
+                .clickable(onClick = onAvatarClick)
+                .testTag("feed_creator_avatar_button"),
             contentAlignment = Alignment.Center
         ) {
             if (avatarHash.startsWith("http")) {
@@ -775,9 +788,11 @@ private fun CreatorAvatarFollowButton(
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .size(20.dp)
+                    .size(22.dp)
                     .clip(CircleShape)
-                    .background(FeedAccentCoral),
+                    .background(FeedAccentCoral)
+                    .clickable(onClick = onFollowClick)
+                    .testTag("feed_creator_follow_button"),
                 contentAlignment = Alignment.Center
             ) {
                 Image(

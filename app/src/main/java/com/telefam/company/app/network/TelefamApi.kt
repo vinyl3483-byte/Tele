@@ -116,6 +116,21 @@ data class RefreshSessionRequest(
 )
 
 @JsonClass(generateAdapter = true)
+data class BackgroundPhotoDto(
+    val id: String = "",
+    @Json(name = "sort_order") val sortOrder: Int = 0,
+    @Json(name = "fingerprint_hash") val fingerprintHash: String = "",
+    val width: Int = 0,
+    val height: Int = 0,
+    val url: String = ""
+)
+
+@JsonClass(generateAdapter = true)
+data class BackgroundPhotosResponse(
+    @Json(name = "background_photos") val backgroundPhotos: List<BackgroundPhotoDto> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
 data class MyProfileDto(
     @Json(name = "user_id") val userId: String = "",
     val email: String = "",
@@ -128,7 +143,105 @@ data class MyProfileDto(
     val location: String = "",
     val bio: String = "",
     @Json(name = "avatar_fingerprint_hash") val avatarFingerprintHash: String = "",
+    @Json(name = "avatar_url") val avatarUrl: String = "",
+    @Json(name = "followers_count") val followersCount: Long = 0L,
+    @Json(name = "following_count") val followingCount: Long = 0L,
+    @Json(name = "posts_count") val postsCount: Long = 0L,
+    @Json(name = "views_count") val viewsCount: Long = 0L,
+    @Json(name = "likes_count") val likesCount: Long = 0L,
+    @Json(name = "background_photos") val backgroundPhotos: List<BackgroundPhotoDto> = emptyList(),
     @Json(name = "profile_completed") val profileCompleted: Boolean = false
+)
+
+@JsonClass(generateAdapter = true)
+data class OwnerProfileItemDto(
+    @Json(name = "item_id") val itemId: String = "",
+    @Json(name = "post_id") val postId: String = "",
+    @Json(name = "video_id") val videoId: String = "",
+    @Json(name = "media_type") val mediaType: String = "video",
+    val visibility: String = "public",
+    val body: String = "",
+    @Json(name = "bg_color_hex") val bgColorHex: String = "",
+    @Json(name = "bg_theme_id") val bgThemeId: String = "",
+    @Json(name = "font_family") val fontFamily: String = "classic",
+    @Json(name = "song_title") val songTitle: String = "",
+    @Json(name = "song_artist") val songArtist: String = "",
+    @Json(name = "thumbnail_url") val thumbnailUrl: String = "",
+    @Json(name = "photo_urls") val photoUrls: List<String> = emptyList(),
+    val hashtags: List<String> = emptyList(),
+    @Json(name = "likes_count") val likesCount: Long = 0L,
+    @Json(name = "views_count") val viewsCount: Long = 0L,
+    @Json(name = "is_liked") val isLiked: Boolean = false,
+    @Json(name = "is_saved") val isSaved: Boolean = false,
+    @Json(name = "is_reposted") val isReposted: Boolean = false,
+    val video: FeedVideoDto? = null,
+    @Json(name = "created_at") val createdAt: Long = 0L
+)
+
+@JsonClass(generateAdapter = true)
+data class OwnerProfileItemsPageDto(
+    val tab: String = "posts",
+    val items: List<OwnerProfileItemDto> = emptyList(),
+    @Json(name = "next_cursor") val nextCursor: String = "",
+    @Json(name = "has_more") val hasMore: Boolean = false
+)
+
+@JsonClass(generateAdapter = true)
+data class SetPostVisibilityRequest(val visibility: String)
+
+@JsonClass(generateAdapter = true)
+data class PostEngageRequest(val action: String, val active: Boolean)
+
+@JsonClass(generateAdapter = true)
+data class PostEngageResponse(
+    @Json(name = "likes_count") val likesCount: Long = 0L,
+    @Json(name = "views_count") val viewsCount: Long = 0L
+)
+
+@JsonClass(generateAdapter = true)
+data class OtherUserProfileDto(
+    @Json(name = "user_id") val userId: String = "",
+    @Json(name = "full_name") val fullName: String = "",
+    val nickname: String = "",
+    val username: String = "",
+    val location: String = "",
+    val bio: String = "",
+    @Json(name = "avatar_fingerprint_hash") val avatarFingerprintHash: String = "",
+    @Json(name = "avatar_url") val avatarUrl: String = "",
+    @Json(name = "followers_count") val followersCount: Long = 0L,
+    @Json(name = "following_count") val followingCount: Long = 0L,
+    @Json(name = "subscribers_count") val subscribersCount: Long = 0L,
+    @Json(name = "posts_count") val postsCount: Long = 0L,
+    @Json(name = "is_following") val isFollowing: Boolean = false,
+    @Json(name = "follows_me") val followsMe: Boolean = false,
+    val relationship: String = "follow",
+    @Json(name = "is_blocked") val isBlocked: Boolean = false,
+    @Json(name = "is_blocked_by") val isBlockedBy: Boolean = false,
+    @Json(name = "is_muted") val isMuted: Boolean = false,
+    @Json(name = "background_photos") val backgroundPhotos: List<BackgroundPhotoDto> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class OtherUserConnectionsResponse(
+    val contacts: List<ContactUserDto> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class SetUserNicknameRequest(val nickname: String)
+
+@JsonClass(generateAdapter = true)
+data class SetUserNicknameResponse(val nickname: String = "")
+
+@JsonClass(generateAdapter = true)
+data class ViewerNicknamesResponse(
+    val nicknames: Map<String, String> = emptyMap()
+)
+
+@JsonClass(generateAdapter = true)
+data class SubmitUserReportRequest(
+    val category: String,
+    @Json(name = "sub_reason") val subReason: String = "",
+    val details: String = ""
 )
 
 @JsonClass(generateAdapter = true)
@@ -565,7 +678,58 @@ interface TelefamApiService {
     suspend fun setupProfile(
         @Header("Authorization") authHeader: String,
         @Body request: ProfileSetupRequest
-    ): Response<ProfileSetupResponse>
+    ): Response<MyProfileDto>
+
+    @GET("/v1/profile/avatar")
+    suspend fun downloadMyAvatar(
+        @Header("Authorization") authHeader: String
+    ): Response<okhttp3.ResponseBody>
+
+    @GET("/v1/profile/backgrounds")
+    suspend fun listBackgroundPhotos(
+        @Header("Authorization") authHeader: String
+    ): Response<BackgroundPhotosResponse>
+
+    @Multipart
+    @POST("/v1/profile/backgrounds")
+    suspend fun uploadBackgroundPhotos(
+        @Header("Authorization") authHeader: String,
+        @Part photos: List<MultipartBody.Part>
+    ): Response<BackgroundPhotosResponse>
+
+    @GET("/v1/profile/backgrounds/{id}")
+    suspend fun downloadBackgroundPhoto(
+        @Header("Authorization") authHeader: String,
+        @Path("id") bgId: String
+    ): Response<okhttp3.ResponseBody>
+
+    @retrofit2.http.DELETE("/v1/profile/backgrounds/{id}")
+    suspend fun deleteBackgroundPhoto(
+        @Header("Authorization") authHeader: String,
+        @Path("id") bgId: String
+    ): Response<BackgroundPhotosResponse>
+
+    @GET("/v1/profile/me/items")
+    suspend fun getOwnerProfileItems(
+        @Header("Authorization") authHeader: String,
+        @Query("tab") tab: String = "posts",
+        @Query("cursor") cursor: String = "",
+        @Query("limit") limit: Int = 24
+    ): Response<OwnerProfileItemsPageDto>
+
+    @retrofit2.http.PATCH("/v1/profile/posts/{id}/visibility")
+    suspend fun setPostVisibility(
+        @Header("Authorization") authHeader: String,
+        @Path("id") postId: String,
+        @Body request: SetPostVisibilityRequest
+    ): Response<Map<String, String>>
+
+    @POST("/v1/profile/posts/{id}/engage")
+    suspend fun engagePost(
+        @Header("Authorization") authHeader: String,
+        @Path("id") postId: String,
+        @Body request: PostEngageRequest
+    ): Response<PostEngageResponse>
 
     @GET("/v1/notifications")
     suspend fun listNotifications(
@@ -786,6 +950,66 @@ interface TelefamApiService {
     suspend fun unmuteUser(
         @Header("Authorization") authHeader: String,
         @Path("id") userId: String
+    ): Response<Unit>
+
+    @GET("/v1/profile/nicknames")
+    suspend fun getViewerNicknames(
+        @Header("Authorization") authHeader: String
+    ): Response<ViewerNicknamesResponse>
+
+    @GET("/v1/users/{id}/profile")
+    suspend fun getOtherUserProfile(
+        @Header("Authorization") authHeader: String,
+        @Path("id") userId: String
+    ): Response<OtherUserProfileDto>
+
+    @GET("/v1/users/{id}/avatar")
+    suspend fun downloadOtherUserAvatar(
+        @Header("Authorization") authHeader: String,
+        @Path("id") userId: String
+    ): Response<okhttp3.ResponseBody>
+
+    @GET("/v1/users/{id}/backgrounds/{bgId}")
+    suspend fun downloadOtherUserBackgroundPhoto(
+        @Header("Authorization") authHeader: String,
+        @Path("id") userId: String,
+        @Path("bgId") bgId: String
+    ): Response<okhttp3.ResponseBody>
+
+    @GET("/v1/users/{id}/items")
+    suspend fun getOtherUserItems(
+        @Header("Authorization") authHeader: String,
+        @Path("id") userId: String,
+        @Query("tab") tab: String = "posts",
+        @Query("cursor") cursor: String = "",
+        @Query("limit") limit: Int = 24
+    ): Response<OwnerProfileItemsPageDto>
+
+    @GET("/v1/users/{id}/connections")
+    suspend fun getOtherUserConnections(
+        @Header("Authorization") authHeader: String,
+        @Path("id") userId: String,
+        @Query("kind") kind: String = "followers"
+    ): Response<OtherUserConnectionsResponse>
+
+    @retrofit2.http.PUT("/v1/users/{id}/nickname")
+    suspend fun setUserNickname(
+        @Header("Authorization") authHeader: String,
+        @Path("id") userId: String,
+        @Body request: SetUserNicknameRequest
+    ): Response<SetUserNicknameResponse>
+
+    @retrofit2.http.DELETE("/v1/users/{id}/nickname")
+    suspend fun deleteUserNickname(
+        @Header("Authorization") authHeader: String,
+        @Path("id") userId: String
+    ): Response<SetUserNicknameResponse>
+
+    @POST("/v1/users/{id}/report")
+    suspend fun submitUserReport(
+        @Header("Authorization") authHeader: String,
+        @Path("id") userId: String,
+        @Body request: SubmitUserReportRequest
     ): Response<Unit>
 
     @GET("/v1/me/saved-videos")

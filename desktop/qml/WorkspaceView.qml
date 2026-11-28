@@ -5,13 +5,13 @@ import QtQuick.Layouts
 Item {
     id: workspace
     readonly property color brandRed: "#C81010"
-    readonly property color bodyBg: telefam.isDarkTheme ? "#121316" : "#FFFFFF"
+    readonly property color bodyBg: telefam.activeTab === 2 ? "#000000" : (telefam.isDarkTheme ? "#121316" : "#FFFFFF")
     readonly property color cardBg: telefam.isDarkTheme ? "#1B1D22" : "#F9FAFB"
-    readonly property color railBg: telefam.isDarkTheme ? "#16181C" : "#F3F4F6"
+    readonly property color railBg: telefam.activeTab === 2 ? "#090A0D" : (telefam.isDarkTheme ? "#16181C" : "#F3F4F6")
     readonly property color pillBg: telefam.isDarkTheme ? "#1E1F24" : "#A60B0B"
-    readonly property color borderCol: telefam.isDarkTheme ? "#2B2F38" : "#E5E7EB"
+    readonly property color borderCol: telefam.activeTab === 2 ? "#1EFFFFFF" : (telefam.isDarkTheme ? "#2B2F38" : "#E5E7EB")
     readonly property color inkCol: telefam.isDarkTheme ? "#FFFFFF" : "#111827"
-    readonly property color subCol: telefam.isDarkTheme ? "#9CA3AF" : "#6B7280"
+    readonly property color subCol: telefam.activeTab === 2 ? "#A8FFFFFF" : (telefam.isDarkTheme ? "#9CA3AF" : "#6B7280")
 
     focus: true
     Keys.onEscapePressed: {
@@ -24,15 +24,16 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        color: brandRed
+        color: telefam.activeTab === 2 ? "#000000" : (telefam.activeTab === 3 ? bodyBg : brandRed)
     }
 
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
 
-        // Top Red Bar: Home search (Chats/Feeds/Profile) OR Contacts bar with Search + Filters
+        // Top Red Bar: hidden during immersive Feeds & Owner Profile tabs
         ColumnLayout {
+            visible: telefam.activeTab !== 2 && telefam.activeTab !== 3
             Layout.fillWidth: true
             spacing: 0
 
@@ -247,8 +248,8 @@ Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
             color: bodyBg
-            topLeftRadius: telefam.activeTab === 1 ? 0 : 24
-            topRightRadius: telefam.activeTab === 1 ? 0 : 24
+            topLeftRadius: (telefam.activeTab === 1 || telefam.activeTab === 2 || telefam.activeTab === 3) ? 0 : 24
+            topRightRadius: (telefam.activeTab === 1 || telefam.activeTab === 2 || telefam.activeTab === 3) ? 0 : 24
             clip: true
 
             RowLayout {
@@ -564,285 +565,15 @@ Item {
                     }
 
                     // Feeds Tab (activeTab === 2)
-                    Item {
+                    FeedView {
                         visible: telefam.activeTab === 2
                         anchors.fill: parent
-
-                        ColumnLayout {
-                            visible: telefam.feedPosts.length === 0
-                            anchors.centerIn: parent
-                            spacing: 14
-
-                            Rectangle {
-                                width: 72
-                                height: 72
-                                radius: 36
-                                color: telefam.isDarkTheme ? "#2C1618" : "#FCE8E8"
-                                Layout.alignment: Qt.AlignHCenter
-                                Image {
-                                    anchors.centerIn: parent
-                                    source: "qrc:/telefam/icons/ic_feeds.svg"
-                                    sourceSize.width: 30
-                                    sourceSize.height: 30
-                                }
-                            }
-                            Text {
-                                text: "No posts yet"
-                                font.pixelSize: 20
-                                font.bold: true
-                                color: inkCol
-                                Layout.alignment: Qt.AlignHCenter
-                            }
-                            Button {
-                                text: "Create post"
-                                Layout.alignment: Qt.AlignHCenter
-                                Layout.preferredWidth: 160
-                                Layout.preferredHeight: 46
-                                background: Rectangle { color: brandRed; radius: 23 }
-                                contentItem: Text {
-                                    text: parent.text
-                                    color: "#FFFFFF"
-                                    font.bold: true
-                                    horizontalAlignment: Text.AlignHCenter
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                                onClicked: telefam.openPostComposer()
-                            }
-                        }
-
-                        ListView {
-                            visible: telefam.feedPosts.length > 0
-                            anchors.fill: parent
-                            anchors.margins: 20
-                            spacing: 12
-                            clip: true
-                            model: telefam.feedPosts
-                            delegate: Rectangle {
-                                width: Math.min(ListView.view.width, 680)
-                                anchors.horizontalCenter: parent ? parent.horizontalCenter : undefined
-                                height: feedCardCol.implicitHeight + 28
-                                radius: 16
-                                color: cardBg
-                                border.color: borderCol
-                                border.width: 1
-
-                                ColumnLayout {
-                                    id: feedCardCol
-                                    anchors.fill: parent
-                                    anchors.margins: 14
-                                    spacing: 8
-
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 10
-                                        Rectangle {
-                                            width: 38
-                                            height: 38
-                                            radius: 19
-                                            color: telefam.isDarkTheme ? "#2C1618" : "#FCE8E8"
-                                            Text {
-                                                anchors.centerIn: parent
-                                                text: ((modelData.author_name || "T").slice(0, 1)).toUpperCase()
-                                                color: brandRed
-                                                font.bold: true
-                                            }
-                                        }
-                                        ColumnLayout {
-                                            Layout.fillWidth: true
-                                            spacing: 1
-                                            Text {
-                                                text: modelData.author_name || modelData.author_handle || "User"
-                                                color: inkCol
-                                                font.bold: true
-                                                font.pixelSize: 14
-                                            }
-                                            Text {
-                                                visible: (modelData.author_handle || "").length > 0
-                                                text: "@" + (modelData.author_handle || "")
-                                                color: subCol
-                                                font.pixelSize: 12
-                                            }
-                                        }
-                                        Rectangle {
-                                            height: 24
-                                            width: typeLbl.implicitWidth + 18
-                                            radius: 12
-                                            color: telefam.isDarkTheme ? "#2C1618" : "#FCE8E8"
-                                            Text {
-                                                id: typeLbl
-                                                anchors.centerIn: parent
-                                                text: modelData.post_type || "text"
-                                                color: brandRed
-                                                font.bold: true
-                                                font.pixelSize: 11
-                                            }
-                                        }
-                                    }
-
-                                    Text {
-                                        visible: (modelData.body || "").length > 0
-                                        Layout.fillWidth: true
-                                        text: modelData.body || ""
-                                        color: inkCol
-                                        font.pixelSize: 14
-                                        wrapMode: Text.Wrap
-                                    }
-
-                                    Text {
-                                        visible: (modelData.song_title || "").length > 0
-                                        text: (modelData.song_title || "") + ((modelData.song_artist || "").length > 0 ? " - " + modelData.song_artist : "")
-                                        color: brandRed
-                                        font.pixelSize: 12
-                                        font.bold: true
-                                    }
-                                }
-                            }
-                        }
                     }
 
-                    // Profile Overview Tab (activeTab === 3)
-                    ScrollView {
+                    // Owner Profile Tab (activeTab === 3)
+                    OwnerProfileView {
                         visible: telefam.activeTab === 3
                         anchors.fill: parent
-                        contentWidth: availableWidth
-
-                        ColumnLayout {
-                            width: Math.min(parent.width - 48, 520)
-                            anchors.horizontalCenter: parent.horizontalCenter
-                            spacing: 16
-
-                            Item { Layout.preferredHeight: 16 }
-
-                            Rectangle {
-                                Layout.fillWidth: true
-                                height: profileCardCol.implicitHeight + 40
-                                radius: 18
-                                color: cardBg
-                                border.color: borderCol
-                                border.width: 1
-
-                                ColumnLayout {
-                                    id: profileCardCol
-                                    anchors.fill: parent
-                                    anchors.margins: 20
-                                    spacing: 10
-
-                                    Rectangle {
-                                        Layout.alignment: Qt.AlignHCenter
-                                        width: 80
-                                        height: 80
-                                        radius: 40
-                                        color: telefam.isDarkTheme ? "#2C1618" : "#FCE8E8"
-                                        border.color: brandRed
-                                        border.width: 2
-                                        Text {
-                                            anchors.centerIn: parent
-                                            readonly property string dn: telefam.myProfile.full_name || telefam.profileFullName || telefam.email || "TF"
-                                            text: dn.slice(0, 2).toUpperCase()
-                                            color: brandRed
-                                            font.bold: true
-                                            font.pixelSize: 22
-                                        }
-                                    }
-
-                                    Text {
-                                        Layout.alignment: Qt.AlignHCenter
-                                        text: telefam.myProfile.full_name || telefam.profileFullName || "Telefam User"
-                                        color: inkCol
-                                        font.bold: true
-                                        font.pixelSize: 20
-                                    }
-
-                                    Text {
-                                        visible: (telefam.myProfile.username || telefam.profileUsername || "").length > 0
-                                        Layout.alignment: Qt.AlignHCenter
-                                        text: "@" + (telefam.myProfile.username || telefam.profileUsername || "")
-                                        color: subCol
-                                        font.pixelSize: 14
-                                    }
-
-                                    Text {
-                                        Layout.alignment: Qt.AlignHCenter
-                                        text: telefam.myProfile.email || telefam.email
-                                        color: subCol
-                                        font.pixelSize: 13
-                                    }
-
-                                    Text {
-                                        visible: (telefam.myProfile.bio || "").length > 0
-                                        Layout.fillWidth: true
-                                        horizontalAlignment: Text.AlignHCenter
-                                        text: telefam.myProfile.bio || ""
-                                        color: inkCol
-                                        font.pixelSize: 14
-                                        wrapMode: Text.Wrap
-                                    }
-
-                                    Text {
-                                        visible: (telefam.myProfile.location || "").length > 0
-                                        Layout.alignment: Qt.AlignHCenter
-                                        text: telefam.myProfile.location || ""
-                                        color: subCol
-                                        font.pixelSize: 13
-                                    }
-                                }
-                            }
-
-                            Button {
-                                text: "Edit profile"
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: 48
-                                background: Rectangle { color: brandRed; radius: 12 }
-                                contentItem: Text {
-                                    text: parent.text
-                                    color: "#FFFFFF"
-                                    font.bold: true
-                                    horizontalAlignment: Text.AlignHCenter
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                                onClicked: telefam.openEditProfile()
-                            }
-
-                            Button {
-                                text: "Sync"
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: 48
-                                background: Rectangle {
-                                    color: cardBg
-                                    radius: 12
-                                    border.color: borderCol
-                                    border.width: 1
-                                }
-                                contentItem: Text {
-                                    text: parent.text
-                                    color: inkCol
-                                    font.bold: true
-                                    horizontalAlignment: Text.AlignHCenter
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                                onClicked: telefam.syncNow()
-                            }
-
-                            Button {
-                                text: "Sign out"
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: 48
-                                background: Rectangle {
-                                    color: cardBg
-                                    radius: 12
-                                    border.color: brandRed
-                                    border.width: 1
-                                }
-                                contentItem: Text {
-                                    text: parent.text
-                                    color: brandRed
-                                    font.bold: true
-                                    horizontalAlignment: Text.AlignHCenter
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                                onClicked: telefam.signOut()
-                            }
-                        }
                     }
                 }
             }
@@ -851,6 +582,7 @@ Item {
 
     Rectangle {
         visible: telefam.toastMessage.length > 0
+        z: 50
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
         anchors.bottomMargin: 28
@@ -952,6 +684,91 @@ Item {
             telefam.createConversation(newChatField.text)
             newChatField.text = ""
         }
+    }
+
+    Dialog {
+        id: savedVideosDialog
+        title: "Saved videos"
+        modal: true
+        anchors.centerIn: parent
+        width: 560
+        height: 480
+        standardButtons: Dialog.Close
+
+        GridView {
+            anchors.fill: parent
+            clip: true
+            cellWidth: Math.max(130, width / 3)
+            cellHeight: cellWidth * 1.33
+            model: telefam.savedVideos
+            delegate: Item {
+                width: GridView.view.cellWidth; height: GridView.view.cellHeight
+                Rectangle {
+                    anchors.fill: parent; anchors.margins: 4; radius: 8; color: "#16181D"; clip: true
+                    Image { anchors.fill: parent; source: telefam.resolveMediaUrl(modelData.thumbnail_url || ""); fillMode: Image.PreserveAspectCrop }
+                    Row {
+                        anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.margins: 6; spacing: 4
+                        Image { source: "qrc:/telefam/icons/ic_play.svg"; sourceSize.width: 11; sourceSize.height: 11; anchors.verticalCenter: parent.verticalCenter }
+                        Text { text: telefam.formatFeedCount(Number(modelData.views_count || 0)); color: "#FFFFFF"; font.pixelSize: 11; font.bold: true }
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: {
+                            savedVideosDialog.close()
+                            telefam.openModalFeedPlayer(telefam.savedVideos, index, "Saved videos")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: safetyPrefsDialog
+        title: "Muted & Blocked"
+        modal: true
+        anchors.centerIn: parent
+        width: 440
+        height: 440
+        standardButtons: Dialog.Close
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 10
+
+            Text { text: "Muted"; color: inkCol; font.bold: true; font.pixelSize: 14 }
+            ListView {
+                Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 6
+                model: telefam.safetyPreferences.muted_users || []
+                delegate: Rectangle {
+                    width: ListView.view.width; height: 48; radius: 10; color: cardBg
+                    RowLayout {
+                        anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10
+                        Text { text: (modelData.full_name || modelData.username || "") + " (@" + (modelData.username || "") + ")"; color: inkCol; Layout.fillWidth: true; elide: Text.ElideRight }
+                        Button { text: "Unmute"; onClicked: telefam.unmuteUserFromSafety(modelData.user_id || "") }
+                    }
+                }
+            }
+
+            Text { text: "Blocked"; color: inkCol; font.bold: true; font.pixelSize: 14 }
+            ListView {
+                Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 6
+                model: telefam.safetyPreferences.blocked_users || []
+                delegate: Rectangle {
+                    width: ListView.view.width; height: 48; radius: 10; color: cardBg
+                    RowLayout {
+                        anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10
+                        Text { text: (modelData.full_name || modelData.username || "") + " (@" + (modelData.username || "") + ")"; color: inkCol; Layout.fillWidth: true; elide: Text.ElideRight }
+                        Button { text: "Unblock"; onClicked: telefam.unblockUserFromSafety(modelData.user_id || "") }
+                    }
+                }
+            }
+        }
+    }
+
+    FeedDiscoveryView {
+        anchors.fill: parent
+        z: 9
     }
 
     PostCreatorView {

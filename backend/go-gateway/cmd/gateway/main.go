@@ -225,6 +225,179 @@ func main() {
 		middleware.WriteJSON(w, status, res)
 	}))
 
+	mux.HandleFunc("GET /v1/profile/avatar", requireAuth(func(w http.ResponseWriter, r *http.Request, uid, _ uuid.UUID, _ string) {
+		raw, mimeType, fpHash, status, err := profileSvc.GetAvatarBytes(r.Context(), uid, uid)
+		if err != nil {
+			middleware.WriteSanitizedError(w, status, err)
+			return
+		}
+		w.Header().Set("Content-Type", mimeType)
+		w.Header().Set("ETag", `"`+fpHash+`"`)
+		w.Header().Set("Cache-Control", "private, max-age=300")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(raw)
+	}))
+
+	mux.HandleFunc("GET /v1/users/{id}/avatar", requireAuth(func(w http.ResponseWriter, r *http.Request, uid, _ uuid.UUID, _ string) {
+		targetID, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			middleware.WriteSanitizedError(w, http.StatusBadRequest, err)
+			return
+		}
+		raw, mimeType, fpHash, status, err := profileSvc.GetAvatarBytes(r.Context(), uid, targetID)
+		if err != nil {
+			middleware.WriteSanitizedError(w, status, err)
+			return
+		}
+		w.Header().Set("Content-Type", mimeType)
+		w.Header().Set("ETag", `"`+fpHash+`"`)
+		w.Header().Set("Cache-Control", "private, max-age=300")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(raw)
+	}))
+
+	mux.HandleFunc("GET /v1/profile/backgrounds", requireAuth(func(w http.ResponseWriter, r *http.Request, uid, _ uuid.UUID, _ string) {
+		items, status, err := profileSvc.ListBackgroundPhotos(r.Context(), uid)
+		if err != nil {
+			middleware.WriteSanitizedError(w, status, err)
+			return
+		}
+		middleware.WriteJSON(w, status, map[string]any{"background_photos": items})
+	}))
+
+	mux.HandleFunc("POST /v1/profile/backgrounds", requireAuth(func(w http.ResponseWriter, r *http.Request, uid, _ uuid.UUID, _ string) {
+		r.Body = http.MaxBytesReader(w, r.Body, 55<<20)
+		if err := r.ParseMultipartForm(16 << 20); err != nil {
+			middleware.WriteSanitizedError(w, http.StatusBadRequest, err)
+			return
+		}
+		defer func() {
+			if r.MultipartForm != nil {
+				_ = r.MultipartForm.RemoveAll()
+			}
+		}()
+		headers := append(r.MultipartForm.File["photos"], r.MultipartForm.File["photo"]...)
+		if len(headers) == 0 || len(headers) > profile.MaxBackgroundPhotos {
+			middleware.WriteSanitizedError(w, http.StatusBadRequest, nil)
+			return
+		}
+		rawList := make([][]byte, 0, len(headers))
+		for _, fh := range headers {
+			if fh.Size <= 0 || fh.Size > media.MaxPostPhotoBytes {
+				middleware.WriteSanitizedError(w, http.StatusBadRequest, nil)
+				return
+			}
+			f, err := fh.Open()
+			if err != nil {
+				middleware.WriteSanitizedError(w, http.StatusBadRequest, err)
+				return
+			}
+			raw, readErr := io.ReadAll(io.LimitReader(f, media.MaxPostPhotoBytes+1))
+			_ = f.Close()
+			if readErr != nil || len(raw) > media.MaxPostPhotoBytes {
+				middleware.WriteSanitizedError(w, http.StatusBadRequest, readErr)
+				return
+			}
+			rawList = append(rawList, raw)
+		}
+		items, status, err := profileSvc.UploadBackgroundPhotos(r.Context(), uid, rawList)
+		if err != nil {
+			middleware.WriteSanitizedError(w, status, err)
+			return
+		}
+		middleware.WriteJSON(w, status, map[string]any{"background_photos": items})
+	}))
+
+	mux.HandleFunc("GET /v1/profile/backgrounds/{id}", requireAuth(func(w http.ResponseWriter, r *http.Request, uid, _ uuid.UUID, _ string) {
+		bgID, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			middleware.WriteSanitizedError(w, http.StatusBadRequest, err)
+			return
+		}
+		raw, mimeType, fpHash, status, err := profileSvc.GetBackgroundPhotoBytes(r.Context(), uid, bgID)
+		if err != nil {
+			middleware.WriteSanitizedError(w, status, err)
+			return
+		}
+		w.Header().Set("Content-Type", mimeType)
+		w.Header().Set("ETag", `"`+fpHash+`"`)
+		w.Header().Set("Cache-Control", "private, max-age=600")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(raw)
+	}))
+
+	mux.HandleFunc("DELETE /v1/profile/backgrounds/{id}", requireAuth(func(w http.ResponseWriter, r *http.Request, uid, _ uuid.UUID, _ string) {
+		bgID, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			middleware.WriteSanitizedError(w, http.StatusBadRequest, err)
+			return
+		}
+		items, status, err := profileSvc.DeleteBackgroundPhoto(r.Context(), uid, bgID)
+		if err != nil {
+			middleware.WriteSanitizedError(w, status, err)
+			return
+		}
+		middleware.WriteJSON(w, status, map[string]any{"background_photos": items})
+	}))
+
+	mux.HandleFunc("GET /v1/profile/me/items", requireAuth(func(w http.ResponseWriter, r *http.Request, uid, _ uuid.UUID, _ string) {
+		tab := r.URL.Query().Get("tab")
+		cursor := r.URL.Query().Get("cursor")
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		page, status, err := profileSvc.GetOwnerProfileItems(r.Context(), feedSvc, uid, tab, cursor, limit)
+		if err != nil {
+			middleware.WriteSanitizedError(w, status, err)
+			return
+		}
+		middleware.WriteJSON(w, status, page)
+	}))
+
+	mux.HandleFunc("PATCH /v1/profile/posts/{id}/visibility", requireAuth(func(w http.ResponseWriter, r *http.Request, uid, _ uuid.UUID, _ string) {
+		pid, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			middleware.WriteSanitizedError(w, http.StatusBadRequest, err)
+			return
+		}
+		var req struct {
+			Visibility string `json:"visibility"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+			middleware.WriteSanitizedError(w, http.StatusBadRequest, err)
+			return
+		}
+		vis, status, err := profileSvc.SetPostVisibility(r.Context(), uid, pid, req.Visibility)
+		if err != nil {
+			middleware.WriteSanitizedError(w, status, err)
+			return
+		}
+		middleware.WriteJSON(w, status, map[string]string{"visibility": vis})
+	}))
+
+	mux.HandleFunc("POST /v1/profile/posts/{id}/engage", requireAuth(func(w http.ResponseWriter, r *http.Request, uid, _ uuid.UUID, _ string) {
+		pid, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			middleware.WriteSanitizedError(w, http.StatusBadRequest, err)
+			return
+		}
+		var req struct {
+			Action string `json:"action"`
+			Active bool   `json:"active"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+			middleware.WriteSanitizedError(w, http.StatusBadRequest, err)
+			return
+		}
+		likes, views, status, err := profileSvc.SetPostEngagement(r.Context(), uid, pid, req.Action, req.Active)
+		if err != nil {
+			middleware.WriteSanitizedError(w, status, err)
+			return
+		}
+		middleware.WriteJSON(w, status, map[string]any{
+			"likes_count": likes,
+			"views_count": views,
+		})
+	}))
+
 	mux.HandleFunc("GET /v1/contacts", requireAuth(func(w http.ResponseWriter, r *http.Request, uid, _ uuid.UUID, _ string) {
 		filter := r.URL.Query().Get("filter")
 		query := r.URL.Query().Get("q")
@@ -489,6 +662,10 @@ func main() {
 		feedSvc.ServeSignedMedia(w, r, r.PathValue("token"), r.PathValue("rest"))
 	})
 
+	mux.HandleFunc("GET /v1/posts/media/signed/{token}", func(w http.ResponseWriter, r *http.Request) {
+		profileSvc.ServeSignedPostPhoto(w, r, r.PathValue("token"))
+	})
+
 	mux.HandleFunc("GET /v1/feed/for-you", requireAuth(func(w http.ResponseWriter, r *http.Request, uid, _ uuid.UUID, _ string) {
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 		page, status, err := feedSvc.GetForYouFeed(r.Context(), uid, r.URL.Query().Get("cursor"), limit)
@@ -738,6 +915,143 @@ func main() {
 			return
 		}
 		middleware.WriteJSON(w, status, map[string]bool{"deleted": true})
+	}))
+
+	mux.HandleFunc("GET /v1/profile/nicknames", requireAuth(func(w http.ResponseWriter, r *http.Request, uid, _ uuid.UUID, _ string) {
+		nicknames, status, err := profileSvc.ListViewerNicknames(r.Context(), uid)
+		if err != nil {
+			middleware.WriteSanitizedError(w, status, err)
+			return
+		}
+		middleware.WriteJSON(w, status, map[string]any{"nicknames": nicknames})
+	}))
+
+	mux.HandleFunc("GET /v1/users/{id}/profile", requireAuth(func(w http.ResponseWriter, r *http.Request, uid, _ uuid.UUID, _ string) {
+		tid, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			middleware.WriteSanitizedError(w, http.StatusBadRequest, err)
+			return
+		}
+		dto, status, err := profileSvc.GetOtherUserProfile(r.Context(), uid, tid)
+		if err != nil {
+			middleware.WriteSanitizedError(w, status, err)
+			return
+		}
+		middleware.WriteJSON(w, status, dto)
+	}))
+
+	mux.HandleFunc("GET /v1/users/{id}/backgrounds/{bgId}", requireAuth(func(w http.ResponseWriter, r *http.Request, uid, _ uuid.UUID, _ string) {
+		tid, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			middleware.WriteSanitizedError(w, http.StatusBadRequest, err)
+			return
+		}
+		bgID, err := uuid.Parse(r.PathValue("bgId"))
+		if err != nil {
+			middleware.WriteSanitizedError(w, http.StatusBadRequest, err)
+			return
+		}
+		raw, mimeType, fpHash, status, err := profileSvc.GetOtherUserBackgroundPhotoBytes(r.Context(), uid, tid, bgID)
+		if err != nil {
+			middleware.WriteSanitizedError(w, status, err)
+			return
+		}
+		w.Header().Set("Content-Type", mimeType)
+		w.Header().Set("ETag", `"`+fpHash+`"`)
+		w.Header().Set("Cache-Control", "private, max-age=600")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(raw)
+	}))
+
+	mux.HandleFunc("GET /v1/users/{id}/items", requireAuth(func(w http.ResponseWriter, r *http.Request, uid, _ uuid.UUID, _ string) {
+		tid, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			middleware.WriteSanitizedError(w, http.StatusBadRequest, err)
+			return
+		}
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		page, status, err := profileSvc.GetOtherUserProfileItems(
+			r.Context(), feedSvc, uid, tid,
+			r.URL.Query().Get("tab"), r.URL.Query().Get("cursor"), limit,
+		)
+		if err != nil {
+			middleware.WriteSanitizedError(w, status, err)
+			return
+		}
+		middleware.WriteJSON(w, status, page)
+	}))
+
+	mux.HandleFunc("GET /v1/users/{id}/connections", requireAuth(func(w http.ResponseWriter, r *http.Request, uid, _ uuid.UUID, _ string) {
+		tid, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			middleware.WriteSanitizedError(w, http.StatusBadRequest, err)
+			return
+		}
+		kind := r.URL.Query().Get("kind")
+		items, status, err := profileSvc.ListOtherUserConnections(r.Context(), uid, tid, kind)
+		if err != nil {
+			middleware.WriteSanitizedError(w, status, err)
+			return
+		}
+		middleware.WriteJSON(w, status, map[string]any{"contacts": items})
+	}))
+
+	mux.HandleFunc("PUT /v1/users/{id}/nickname", requireAuth(func(w http.ResponseWriter, r *http.Request, uid, _ uuid.UUID, _ string) {
+		tid, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			middleware.WriteSanitizedError(w, http.StatusBadRequest, err)
+			return
+		}
+		var req struct {
+			Nickname string `json:"nickname"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+			middleware.WriteSanitizedError(w, http.StatusBadRequest, err)
+			return
+		}
+		saved, status, err := profileSvc.SetUserNickname(r.Context(), uid, tid, req.Nickname)
+		if err != nil {
+			middleware.WriteSanitizedError(w, status, err)
+			return
+		}
+		middleware.WriteJSON(w, status, map[string]string{"nickname": saved})
+	}))
+
+	mux.HandleFunc("DELETE /v1/users/{id}/nickname", requireAuth(func(w http.ResponseWriter, r *http.Request, uid, _ uuid.UUID, _ string) {
+		tid, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			middleware.WriteSanitizedError(w, http.StatusBadRequest, err)
+			return
+		}
+		saved, status, err := profileSvc.SetUserNickname(r.Context(), uid, tid, "")
+		if err != nil {
+			middleware.WriteSanitizedError(w, status, err)
+			return
+		}
+		middleware.WriteJSON(w, status, map[string]string{"nickname": saved})
+	}))
+
+	mux.HandleFunc("POST /v1/users/{id}/report", requireAuth(func(w http.ResponseWriter, r *http.Request, uid, _ uuid.UUID, _ string) {
+		tid, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			middleware.WriteSanitizedError(w, http.StatusBadRequest, err)
+			return
+		}
+		var req struct {
+			Category  string `json:"category"`
+			SubReason string `json:"sub_reason"`
+			Details   string `json:"details"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&req); err != nil {
+			middleware.WriteSanitizedError(w, http.StatusBadRequest, err)
+			return
+		}
+		status, err := profileSvc.SubmitUserReport(r.Context(), uid, tid, req.Category, req.SubReason, req.Details)
+		if err != nil {
+			middleware.WriteSanitizedError(w, status, err)
+			return
+		}
+		middleware.WriteJSON(w, status, map[string]bool{"reported": true})
 	}))
 
 	mux.HandleFunc("POST /v1/users/{id}/block", requireAuth(func(w http.ResponseWriter, r *http.Request, uid, _ uuid.UUID, _ string) {

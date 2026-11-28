@@ -15,6 +15,8 @@ qt_add_executable(telefam_desktop
     src/main.cpp
     src/TelefamDesktopController.hpp
     src/TelefamDesktopController.cpp
+    src/TelefamDesktopController_Feed.cpp
+    src/TelefamDesktopController_OwnerProfile.cpp
     resources/resources.qrc
 )
 
@@ -27,8 +29,11 @@ qt_add_qml_module(telefam_desktop
         qml/ProfileSetupView.qml
         qml/WorkspaceView.qml
         qml/ContactsView.qml
+        qml/OwnerProfileView.qml
         qml/PostThemeCanvas.qml
         qml/PostCreatorView.qml
+        qml/FeedView.qml
+        qml/FeedDiscoveryView.qml
 )
 
 target_link_libraries(telefam_desktop

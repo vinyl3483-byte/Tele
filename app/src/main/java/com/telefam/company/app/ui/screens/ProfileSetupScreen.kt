@@ -693,7 +693,7 @@ private fun profileTextFieldColors() = OutlinedTextFieldDefaults.colors(
 )
 
 @Composable
-private fun ProfilePhotoCropDialog(
+internal fun ProfilePhotoCropDialog(
     source: Bitmap,
     onDismiss: () -> Unit,
     onApply: (Bitmap) -> Unit
@@ -777,7 +777,7 @@ private fun ProfilePhotoCropDialog(
     )
 }
 
-private fun decodeSampledBitmap(context: Context, uri: Uri, maxDim: Int): Bitmap? {
+internal fun decodeSampledBitmap(context: Context, uri: Uri, maxDim: Int): Bitmap? {
     return runCatching {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         context.contentResolver.openInputStream(uri)?.use {

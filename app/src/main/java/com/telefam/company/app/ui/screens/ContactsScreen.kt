@@ -211,6 +211,7 @@ fun ContactsScreenContent(
     isLoading: Boolean,
     hasMore: Boolean,
     onToggleFollow: (ContactModel) -> Unit,
+    onOpenProfile: (ContactModel) -> Unit = {},
     onLoadMore: () -> Unit,
     onBottomBarVisibilityChange: (Boolean) -> Unit
 ) {
@@ -301,6 +302,7 @@ fun ContactsScreenContent(
                     ContactListRow(
                         contact = contact,
                         isDarkTheme = isDarkTheme,
+                        onOpenProfile = { onOpenProfile(contact) },
                         onToggleFollow = { onToggleFollow(contact) }
                     )
                 }
@@ -350,6 +352,7 @@ fun ContactsScreenContent(
                     ContactGridCard(
                         contact = contact,
                         isDarkTheme = isDarkTheme,
+                        onOpenProfile = { onOpenProfile(contact) },
                         onToggleFollow = { onToggleFollow(contact) }
                     )
                 }
@@ -391,11 +394,13 @@ private fun SectionHeader(title: String) {
 private fun ContactListRow(
     contact: ContactModel,
     isDarkTheme: Boolean,
+    onOpenProfile: () -> Unit,
     onToggleFollow: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clickable(onClick = onOpenProfile)
             .padding(horizontal = 16.dp, vertical = 10.dp)
             .testTag("contact_row_${contact.userId}"),
         verticalAlignment = Alignment.CenterVertically
@@ -436,6 +441,7 @@ private fun ContactListRow(
 private fun ContactGridCard(
     contact: ContactModel,
     isDarkTheme: Boolean,
+    onOpenProfile: () -> Unit,
     onToggleFollow: () -> Unit
 ) {
     Surface(
@@ -444,6 +450,7 @@ private fun ContactGridCard(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = Modifier
             .fillMaxWidth()
+            .clickable(onClick = onOpenProfile)
             .testTag("contact_card_${contact.userId}")
     ) {
         Row(

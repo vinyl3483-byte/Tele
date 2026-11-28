@@ -4,6 +4,7 @@ import SwiftUI
 struct TelefamApp: App {
     @StateObject private var viewModel = TelefamViewModel()
     @StateObject private var network = NetworkMonitor()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -33,6 +34,9 @@ struct TelefamApp: App {
                 if newQuality != .offline {
                     Task { await viewModel.syncAll(quality: newQuality) }
                 }
+            }
+            .onChange(of: scenePhase) { _, newPhase in
+                viewModel.feedPlayback.setAppForeground(newPhase == .active)
             }
         }
     }

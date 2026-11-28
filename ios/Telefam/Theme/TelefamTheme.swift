@@ -830,4 +830,119 @@ struct VisibilityEyeVectorIcon: Shape {
     }
 }
 
+struct MenuDashesVectorIcon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 24.0
+        let sy = rect.height / 24.0
+        var p = Path()
+        p.move(to: CGPoint(x: 4 * sx, y: 7 * sy))
+        p.addLine(to: CGPoint(x: 20 * sx, y: 7 * sy))
+        p.move(to: CGPoint(x: 7 * sx, y: 12 * sy))
+        p.addLine(to: CGPoint(x: 20 * sx, y: 12 * sy))
+        p.move(to: CGPoint(x: 4 * sx, y: 17 * sy))
+        p.addLine(to: CGPoint(x: 20 * sx, y: 17 * sy))
+        return p
+    }
+}
+
+struct GridFourSquaresVectorIcon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 24.0
+        let sy = rect.height / 24.0
+        var p = Path()
+        let corner = CGSize(width: 2 * sx, height: 2 * sy)
+        p.addRoundedRect(in: CGRect(x: 3 * sx, y: 3 * sy, width: 7.5 * sx, height: 7.5 * sy), cornerSize: corner)
+        p.addRoundedRect(in: CGRect(x: 13.5 * sx, y: 3 * sy, width: 7.5 * sx, height: 7.5 * sy), cornerSize: corner)
+        p.addRoundedRect(in: CGRect(x: 3 * sx, y: 13.5 * sy, width: 7.5 * sx, height: 7.5 * sy), cornerSize: corner)
+        p.addRoundedRect(in: CGRect(x: 13.5 * sx, y: 13.5 * sy, width: 7.5 * sx, height: 7.5 * sy), cornerSize: corner)
+        return p
+    }
+}
+
+struct ShareNodesVectorIcon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 24.0
+        let sy = rect.height / 24.0
+        var p = Path()
+        p.move(to: CGPoint(x: 15.8 * sx, y: 6.4 * sy))
+        p.addLine(to: CGPoint(x: 8.2 * sx, y: 10.9 * sy))
+        p.move(to: CGPoint(x: 8.2 * sx, y: 13.1 * sy))
+        p.addLine(to: CGPoint(x: 15.8 * sx, y: 17.6 * sy))
+        p.addEllipse(in: CGRect(x: 15.2 * sx, y: 2.8 * sy, width: 5.6 * sx, height: 5.6 * sy))
+        p.addEllipse(in: CGRect(x: 3.2 * sx, y: 9.2 * sy, width: 5.6 * sx, height: 5.6 * sy))
+        p.addEllipse(in: CGRect(x: 15.2 * sx, y: 15.6 * sy, width: 5.6 * sx, height: 5.6 * sy))
+        return p
+    }
+}
+
+struct SettingsGearVectorIcon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 24.0
+        let sy = rect.height / 24.0
+        var p = Path()
+        p.addEllipse(in: CGRect(x: 9 * sx, y: 9 * sy, width: 6 * sx, height: 6 * sy))
+        p.addEllipse(in: CGRect(x: 4.5 * sx, y: 4.5 * sy, width: 15 * sx, height: 15 * sy))
+        let teeth: [(Double, Double, Double, Double)] = [
+            (12, 1.5, 12, 4.5), (12, 19.5, 12, 22.5),
+            (1.5, 12, 4.5, 12), (19.5, 12, 22.5, 12),
+            (4.6, 4.6, 6.7, 6.7), (17.3, 17.3, 19.4, 19.4),
+            (19.4, 4.6, 17.3, 6.7), (6.7, 17.3, 4.6, 19.4)
+        ]
+        for (x1, y1, x2, y2) in teeth {
+            p.move(to: CGPoint(x: x1 * sx, y: y1 * sy))
+            p.addLine(to: CGPoint(x: x2 * sx, y: y2 * sy))
+        }
+        return p
+    }
+}
+
+struct PhotoFrameVectorIcon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 24.0
+        let sy = rect.height / 24.0
+        var p = Path()
+        p.addRoundedRect(in: CGRect(x: 3 * sx, y: 4 * sy, width: 18 * sx, height: 16 * sy), cornerSize: CGSize(width: 2 * sx, height: 2 * sy))
+        p.addEllipse(in: CGRect(x: 7 * sx, y: 7.5 * sy, width: 2.8 * sx, height: 2.8 * sx))
+        p.move(to: CGPoint(x: 5 * sx, y: 18 * sy))
+        p.addLine(to: CGPoint(x: 10.5 * sx, y: 12 * sy))
+        p.addLine(to: CGPoint(x: 14 * sx, y: 15.5 * sy))
+        p.addLine(to: CGPoint(x: 17 * sx, y: 12.5 * sy))
+        p.addLine(to: CGPoint(x: 20 * sx, y: 18 * sy))
+        return p
+    }
+}
+
+struct PlayTriangleVectorIcon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 24.0
+        let sy = rect.height / 24.0
+        var p = Path()
+        p.move(to: CGPoint(x: 7 * sx, y: 4.5 * sy))
+        p.addLine(to: CGPoint(x: 19.5 * sx, y: 12 * sy))
+        p.addLine(to: CGPoint(x: 7 * sx, y: 19.5 * sy))
+        p.closeSubpath()
+        return p
+    }
+}
+
+struct TrashVectorIcon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 24.0
+        let sy = rect.height / 24.0
+        var p = Path()
+        p.move(to: CGPoint(x: 4 * sx, y: 7 * sy))
+        p.addLine(to: CGPoint(x: 20 * sx, y: 7 * sy))
+        p.move(to: CGPoint(x: 9 * sx, y: 7 * sy))
+        p.addLine(to: CGPoint(x: 9 * sx, y: 4 * sy))
+        p.addLine(to: CGPoint(x: 15 * sx, y: 4 * sy))
+        p.addLine(to: CGPoint(x: 15 * sx, y: 7 * sy))
+        p.move(to: CGPoint(x: 6 * sx, y: 7 * sy))
+        p.addLine(to: CGPoint(x: 7.5 * sx, y: 20 * sy))
+        p.addLine(to: CGPoint(x: 16.5 * sx, y: 20 * sy))
+        p.addLine(to: CGPoint(x: 18 * sx, y: 7 * sy))
+        return p
+    }
+}
+
+
 

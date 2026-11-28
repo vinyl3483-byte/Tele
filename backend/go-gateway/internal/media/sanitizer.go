@@ -303,3 +303,28 @@ func SanitizePostPhotoInIsolation(ctx context.Context, raw []byte, pepper []byte
 		return res.out, res.err
 	}
 }
+
+type SanitizedCoverPhoto struct {
+	Bytes           []byte
+	MimeType        string
+	Width           int
+	Height          int
+	FingerprintHash string
+}
+
+// SanitizeCoverPhotoInIsolation reuses the isolated pixel decode/re-encode sanitizer,
+// stripping all EXIF/metadata, clamping edges to 1920px, and computing an HMAC-SHA256 fingerprint.
+func SanitizeCoverPhotoInIsolation(ctx context.Context, raw []byte, pepper []byte) (*SanitizedCoverPhoto, error) {
+	clean, err := SanitizePostPhotoInIsolation(ctx, raw, pepper, "cover_photo.jpg")
+	if err != nil {
+		return nil, err
+	}
+	return &SanitizedCoverPhoto{
+		Bytes:           clean.Bytes,
+		MimeType:        clean.MimeType,
+		Width:           clean.Width,
+		Height:          clean.Height,
+		FingerprintHash: clean.ContentID,
+	}, nil
+}
+

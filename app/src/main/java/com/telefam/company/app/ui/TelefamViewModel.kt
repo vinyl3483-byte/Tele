@@ -27,6 +27,8 @@ import com.telefam.company.app.network.HashtagDto
 import com.telefam.company.app.network.MusicTrackDto
 import com.telefam.company.app.network.MyProfileDto
 import com.telefam.company.app.network.NotificationDto
+import com.telefam.company.app.network.OtherUserProfileDto
+import com.telefam.company.app.network.OwnerProfileItemDto
 import com.telefam.company.app.network.ProfileSetupRequest
 import com.telefam.company.app.ui.theme.PostFontStyle
 import kotlinx.coroutines.Job
@@ -169,6 +171,116 @@ data class PostComposerState(
         } && uploadStatus != PostUploadStatus.UPLOADING
 }
 
+enum class OwnerProfileTab(val apiValue: String) {
+    POSTS("posts"),
+    REPOSTS("reposts"),
+    LOCKED("locked"),
+    SAVED("saved")
+}
+
+data class OwnerProfileUiState(
+    val activeCategory: OwnerProfileTab = OwnerProfileTab.POSTS,
+    val itemsByCategory: Map<OwnerProfileTab, List<OwnerProfileItemDto>> = emptyMap(),
+    val isLoadingItems: Boolean = false,
+    val isRefreshing: Boolean = false,
+    val isUploadingBackgrounds: Boolean = false,
+    val isUploadingAvatar: Boolean = false,
+    val localAvatarPath: String? = null,
+    val localBackgroundPaths: List<String> = emptyList(),
+    val connectionsSheetMode: String? = null,
+    val connectionsUsers: List<ContactModel> = emptyList(),
+    val isLoadingConnections: Boolean = false,
+    val activeViewerItem: OwnerProfileItemDto? = null,
+    val toastMessage: String? = null
+)
+
+enum class OtherProfileTab(val apiValue: String) {
+    POSTS("posts"),
+    REPOSTS("reposts")
+}
+
+enum class UserReportCategory(
+    val apiValue: String,
+    val title: String,
+    val subReasons: List<String>
+) {
+    SPAM(
+        apiValue = "spam",
+        title = "Spam & fake engagement",
+        subReasons = listOf("Bot or automated behavior", "Repetitive unsolicited links", "Fake followers or engagement")
+    ),
+    HARASSMENT(
+        apiValue = "harassment",
+        title = "Harassment or bullying",
+        subReasons = listOf("Targeted abuse", "Threats or intimidation", "Unwanted repeated contact")
+    ),
+    IMPERSONATION(
+        apiValue = "impersonation",
+        title = "Impersonation",
+        subReasons = listOf("Pretending to be me", "Pretending to be someone else", "Misleading brand or public figure")
+    ),
+    HATE_SPEECH(
+        apiValue = "hate_speech",
+        title = "Hate speech or symbols",
+        subReasons = listOf("Attacks on protected groups", "Dehumanizing language", "Promotes discrimination")
+    ),
+    VIOLENCE(
+        apiValue = "violence",
+        title = "Violence or dangerous behavior",
+        subReasons = listOf("Graphic violence", "Threats of physical harm", "Dangerous challenges")
+    ),
+    NUDITY(
+        apiValue = "nudity_or_sexual_content",
+        title = "Adult nudity or sexual content",
+        subReasons = listOf("Explicit imagery", "Sexual solicitation", "Non-consensual content")
+    ),
+    SCAM(
+        apiValue = "scam_or_fraud",
+        title = "Scam or fraud",
+        subReasons = listOf("Financial scam", "Phishing links", "Counterfeit goods or giveaways")
+    ),
+    OTHER(
+        apiValue = "other",
+        title = "Other safety issue",
+        subReasons = listOf("Inappropriate profile info", "Underage account concern", "Other policy violation")
+    )
+}
+
+data class UserReportSheetState(
+    val isOpen: Boolean = false,
+    val targetUserId: String = "",
+    val step: Int = 1,
+    val selectedCategory: UserReportCategory? = null,
+    val selectedSubReason: String = "",
+    val details: String = "",
+    val isSubmitting: Boolean = false
+)
+
+data class OtherProfileInstanceState(
+    val userId: String,
+    val profile: OtherUserProfileDto? = null,
+    val activeCategory: OtherProfileTab = OtherProfileTab.POSTS,
+    val itemsByCategory: Map<OtherProfileTab, List<OwnerProfileItemDto>> = emptyMap(),
+    val localAvatarPath: String? = null,
+    val localBackgroundPaths: List<String> = emptyList(),
+    val isLoadingProfile: Boolean = false,
+    val isLoadingItems: Boolean = false,
+    val isRefreshing: Boolean = false,
+    val connectionsSheetMode: String? = null,
+    val connectionsUsers: List<ContactModel> = emptyList(),
+    val isLoadingConnections: Boolean = false,
+    val activeViewerItem: OwnerProfileItemDto? = null
+)
+
+data class OtherProfileUiState(
+    val stack: List<OtherProfileInstanceState> = emptyList(),
+    val viewerNicknames: Map<String, String> = emptyMap(),
+    val reportSheet: UserReportSheetState = UserReportSheetState(),
+    val toastMessage: String? = null
+) {
+    val top: OtherProfileInstanceState? get() = stack.lastOrNull()
+}
+
 data class TelefamUiState(
     val initialized: Boolean = false,
     val isDarkTheme: Boolean = true,
@@ -191,6 +303,8 @@ data class TelefamUiState(
     val contactsToastMessage: String? = null,
     val isEditingProfile: Boolean = false,
     val myProfile: MyProfileDto? = null,
+    val ownerProfile: OwnerProfileUiState = OwnerProfileUiState(),
+    val otherProfile: OtherProfileUiState = OtherProfileUiState(),
     val feedPosts: List<FeedPostDto> = emptyList(),
     val isLoadingFeed: Boolean = false,
     val notifications: List<NotificationDto> = emptyList(),
@@ -217,7 +331,8 @@ class TelefamViewModel(
         playerController = feedPlayerController,
         networkQualityProvider = { networkQuality.value },
         onContactsChanged = { refreshContacts(reset = true) },
-        onUseAudioInPost = { audio -> openPostComposerWithAudio(audio) }
+        onUseAudioInPost = { audio -> openPostComposerWithAudio(audio) },
+        onOpenUserProfile = { userId -> openUserProfile(userId) }
     )
     val videoFeedState: StateFlow<VideoFeedUiState> = feedController.state
     val feedPlaybackState: StateFlow<FeedPlaybackState> = feedPlayerController.playbackState
@@ -233,10 +348,14 @@ class TelefamViewModel(
     val contacts: StateFlow<List<ContactModel>> =
         combine(
             repository.observeCachedContacts(),
-            _uiState.map { it.contactFilter to it.contactSearchQuery }.distinctUntilChanged()
-        ) { cached, (filter, rawQuery) ->
+            _uiState.map {
+                Triple(it.contactFilter, it.contactSearchQuery, it.otherProfile.viewerNicknames)
+            }.distinctUntilChanged()
+        ) { cached, (filter, rawQuery, nicknames) ->
             val q = rawQuery.trim().lowercase()
-            cached.filter { item ->
+            cached.mapNotNull { rawItem ->
+                val nick = nicknames[rawItem.userId]?.trim().orEmpty()
+                val item = if (nick.isNotEmpty()) rawItem.copy(fullName = nick) else rawItem
                 val matchesFilter = when (filter) {
                     ContactFilter.ALL -> true
                     ContactFilter.SUGGESTIONS -> !item.isFollowing
@@ -246,8 +365,9 @@ class TelefamViewModel(
                 }
                 val matchesQuery = q.isEmpty() ||
                     item.fullName.lowercase().contains(q) ||
+                    rawItem.fullName.lowercase().contains(q) ||
                     item.username.lowercase().contains(q)
-                matchesFilter && matchesQuery
+                if (matchesFilter && matchesQuery) item else null
             }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -272,8 +392,15 @@ class TelefamViewModel(
             val dark = repository.loadThemeDark()
             val suggestedIso = repository.suggestDeviceCountryIso()
             val cachedProfile = repository.loadCachedMyProfile()
+            val cachedAvatarPath = repository.loadCachedAvatarPath()
+            val cachedBgPaths = repository.loadCachedBackgroundPaths()
+            val cachedOwnerMap = OwnerProfileTab.entries.associateWith { tab ->
+                repository.loadCachedOwnerProfileItems(tab.apiValue)?.items.orEmpty()
+            }.filterValues { it.isNotEmpty() }
             val cachedFeed = repository.loadCachedFeedPosts()
             val cachedNotifs = repository.loadCachedNotifications()
+            val cachedNicknames = repository.loadCachedViewerNicknames()
+            feedController.updateViewerNicknames(cachedNicknames)
             val prefill = saved?.let { seedProfileSetup(it.email, suggestedIso) }
                 ?: ProfileSetupState(countryIso = suggestedIso)
             _uiState.update {
@@ -282,6 +409,12 @@ class TelefamViewModel(
                     isDarkTheme = dark,
                     session = saved,
                     myProfile = cachedProfile,
+                    ownerProfile = it.ownerProfile.copy(
+                        localAvatarPath = cachedAvatarPath,
+                        localBackgroundPaths = cachedBgPaths,
+                        itemsByCategory = cachedOwnerMap
+                    ),
+                    otherProfile = it.otherProfile.copy(viewerNicknames = cachedNicknames),
                     feedPosts = cachedFeed,
                     notifications = cachedNotifs,
                     profileSetup = prefill
@@ -289,8 +422,10 @@ class TelefamViewModel(
             }
             if (saved != null && saved.profileCompleted) {
                 repository.syncPendingAndRefresh(networkQuality.value, _uiState.value.selectedConversationId)
+                refreshViewerNicknames()
                 refreshContacts(reset = true)
                 refreshMyProfile()
+                loadOwnerProfileItems(_uiState.value.ownerProfile.activeCategory)
                 refreshFeedPosts()
                 feedController.loadInitialFromCacheAndRefresh(true)
                 refreshNotifications()
@@ -304,6 +439,7 @@ class TelefamViewModel(
                 val s = _uiState.value.session
                 if (quality == NetworkQuality.ONLINE && s != null && s.profileCompleted) {
                     repository.syncPendingAndRefresh(quality, _uiState.value.selectedConversationId)
+                    refreshViewerNicknames()
                     refreshContacts(reset = true)
                     refreshMyProfile()
                     refreshFeedPosts()
@@ -468,7 +604,10 @@ class TelefamViewModel(
 
     fun setCroppedAvatar(bitmap: Bitmap) {
         _uiState.update {
-            it.copy(profileSetup = it.profileSetup.copy(avatarBitmap = bitmap, errorMessage = null))
+            it.copy(
+                profileSetup = it.profileSetup.copy(avatarBitmap = bitmap, errorMessage = null),
+                ownerProfile = it.ownerProfile.copy(isUploadingAvatar = true)
+            )
         }
         viewModelScope.launch {
             val out = ByteArrayOutputStream()
@@ -477,11 +616,42 @@ class TelefamViewModel(
             if (networkQuality.value == NetworkQuality.ONLINE) {
                 when (val res = repository.uploadSanitizedAvatar(bytes)) {
                     is RepoResult.Success -> {
-                        _uiState.update {
-                            it.copy(profileSetup = it.profileSetup.copy(avatarFingerprintHash = res.data))
+                        val localPath = repository.loadCachedAvatarPath()
+                        val updatedProfile = repository.loadCachedMyProfile()
+                        _uiState.update { st ->
+                            st.copy(
+                                myProfile = updatedProfile ?: st.myProfile?.copy(
+                                    avatarFingerprintHash = res.data,
+                                    avatarUrl = "/v1/profile/avatar?v=${res.data}"
+                                ),
+                                profileSetup = st.profileSetup.copy(avatarFingerprintHash = res.data),
+                                ownerProfile = st.ownerProfile.copy(
+                                    isUploadingAvatar = false,
+                                    localAvatarPath = localPath ?: st.ownerProfile.localAvatarPath
+                                )
+                            )
                         }
                     }
-                    is RepoResult.Failure -> Unit
+                    is RepoResult.Failure -> {
+                        _uiState.update {
+                            it.copy(
+                                ownerProfile = it.ownerProfile.copy(
+                                    isUploadingAvatar = false,
+                                    toastMessage = res.userMessage
+                                )
+                            )
+                        }
+                    }
+                }
+            } else {
+                val localPath = repository.saveLocalAvatarBytes("pending_${System.currentTimeMillis()}", bytes)
+                _uiState.update {
+                    it.copy(
+                        ownerProfile = it.ownerProfile.copy(
+                            isUploadingAvatar = false,
+                            localAvatarPath = localPath
+                        )
+                    )
                 }
             }
         }
@@ -535,9 +705,11 @@ class TelefamViewModel(
             )
             when (val res = repository.completeProfileSetup(req, networkQuality.value)) {
                 is RepoResult.Success -> {
+                    val immediateProfile = repository.loadCachedMyProfile()
                     _uiState.update {
                         it.copy(
                             session = res.data,
+                            myProfile = immediateProfile ?: it.myProfile,
                             isEditingProfile = false,
                             profileSetup = it.profileSetup.copy(isSubmitting = false)
                         )
@@ -581,9 +753,7 @@ class TelefamViewModel(
                 }
             }
             HomeTab.PROFILE -> {
-                refreshMyProfile()
-                feedController.refreshSavedVideos()
-                feedController.refreshSafetyPreferences()
+                refreshOwnerProfile(isPullGesture = false)
             }
         }
     }
@@ -608,9 +778,957 @@ class TelefamViewModel(
         if (!sess.profileCompleted || networkQuality.value == NetworkQuality.OFFLINE) return
         viewModelScope.launch {
             when (val res = repository.fetchMyProfile()) {
-                is RepoResult.Success -> _uiState.update { it.copy(myProfile = res.data) }
+                is RepoResult.Success -> {
+                    _uiState.update { it.copy(myProfile = res.data) }
+                    val localAvatar = repository.ensureAvatarCachedLocally(res.data)
+                    val localBgs = repository.ensureBackgroundsCachedLocally(res.data.backgroundPhotos)
+                    _uiState.update { st ->
+                        st.copy(
+                            ownerProfile = st.ownerProfile.copy(
+                                localAvatarPath = localAvatar ?: st.ownerProfile.localAvatarPath,
+                                localBackgroundPaths = localBgs
+                            )
+                        )
+                    }
+                }
                 is RepoResult.Failure -> Unit
             }
+        }
+    }
+
+    fun refreshOwnerProfile(isPullGesture: Boolean) {
+        val sess = _uiState.value.session ?: return
+        if (!sess.profileCompleted) return
+        viewModelScope.launch {
+            if (isPullGesture) {
+                _uiState.update { it.copy(ownerProfile = it.ownerProfile.copy(isRefreshing = true)) }
+            }
+            if (networkQuality.value == NetworkQuality.ONLINE) {
+                when (val res = repository.fetchMyProfile()) {
+                    is RepoResult.Success -> {
+                        _uiState.update { it.copy(myProfile = res.data) }
+                        val localAvatar = repository.ensureAvatarCachedLocally(res.data)
+                        val localBgs = repository.ensureBackgroundsCachedLocally(res.data.backgroundPhotos)
+                        _uiState.update { st ->
+                            st.copy(
+                                ownerProfile = st.ownerProfile.copy(
+                                    localAvatarPath = localAvatar ?: st.ownerProfile.localAvatarPath,
+                                    localBackgroundPaths = localBgs
+                                )
+                            )
+                        }
+                    }
+                    is RepoResult.Failure -> Unit
+                }
+            }
+            loadOwnerProfileItemsInternal(_uiState.value.ownerProfile.activeCategory)
+            _uiState.update { it.copy(ownerProfile = it.ownerProfile.copy(isRefreshing = false)) }
+        }
+    }
+
+    fun selectOwnerProfileCategory(tab: OwnerProfileTab) {
+        _uiState.update { st ->
+            st.copy(ownerProfile = st.ownerProfile.copy(activeCategory = tab))
+        }
+        loadOwnerProfileItems(tab)
+    }
+
+    fun loadOwnerProfileItems(tab: OwnerProfileTab) {
+        viewModelScope.launch {
+            loadOwnerProfileItemsInternal(tab)
+        }
+    }
+
+    private suspend fun loadOwnerProfileItemsInternal(tab: OwnerProfileTab) {
+        val cached = repository.loadCachedOwnerProfileItems(tab.apiValue)?.items
+        if (!cached.isNullOrEmpty() && _uiState.value.ownerProfile.itemsByCategory[tab].isNullOrEmpty()) {
+            _uiState.update { st ->
+                st.copy(
+                    ownerProfile = st.ownerProfile.copy(
+                        itemsByCategory = st.ownerProfile.itemsByCategory + (tab to cached)
+                    )
+                )
+            }
+        }
+        if (networkQuality.value == NetworkQuality.OFFLINE) return
+        _uiState.update { st ->
+            st.copy(ownerProfile = st.ownerProfile.copy(isLoadingItems = true))
+        }
+        when (val res = repository.fetchOwnerProfileItems(tab.apiValue)) {
+            is RepoResult.Success -> {
+                _uiState.update { st ->
+                    st.copy(
+                        ownerProfile = st.ownerProfile.copy(
+                            isLoadingItems = false,
+                            itemsByCategory = st.ownerProfile.itemsByCategory + (tab to res.data.items)
+                        )
+                    )
+                }
+            }
+            is RepoResult.Failure -> {
+                _uiState.update { st ->
+                    st.copy(ownerProfile = st.ownerProfile.copy(isLoadingItems = false))
+                }
+            }
+        }
+    }
+
+    fun uploadOwnerBackgroundPhotos(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        val existingCount = _uiState.value.myProfile?.backgroundPhotos?.size ?: 0
+        val remaining = (5 - existingCount).coerceAtLeast(0)
+        if (remaining == 0 || uris.size > remaining) {
+            _uiState.update {
+                it.copy(
+                    ownerProfile = it.ownerProfile.copy(
+                        toastMessage = "Maximum 5 background photos allowed"
+                    )
+                )
+            }
+            if (remaining == 0) return
+        }
+        val toUpload = uris.take(remaining)
+        viewModelScope.launch {
+            _uiState.update { it.copy(ownerProfile = it.ownerProfile.copy(isUploadingBackgrounds = true)) }
+            when (val res = repository.uploadBackgroundPhotos(toUpload)) {
+                is RepoResult.Success -> {
+                    val localBgs = repository.loadCachedBackgroundPaths()
+                    _uiState.update { st ->
+                        st.copy(
+                            myProfile = st.myProfile?.copy(backgroundPhotos = res.data),
+                            ownerProfile = st.ownerProfile.copy(
+                                isUploadingBackgrounds = false,
+                                localBackgroundPaths = localBgs
+                            )
+                        )
+                    }
+                }
+                is RepoResult.Failure -> {
+                    _uiState.update {
+                        it.copy(
+                            ownerProfile = it.ownerProfile.copy(
+                                isUploadingBackgrounds = false,
+                                toastMessage = res.userMessage
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun deleteOwnerBackgroundPhoto(bgId: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(ownerProfile = it.ownerProfile.copy(isUploadingBackgrounds = true)) }
+            when (val res = repository.deleteBackgroundPhoto(bgId)) {
+                is RepoResult.Success -> {
+                    val localBgs = repository.loadCachedBackgroundPaths()
+                    _uiState.update { st ->
+                        st.copy(
+                            myProfile = st.myProfile?.copy(backgroundPhotos = res.data),
+                            ownerProfile = st.ownerProfile.copy(
+                                isUploadingBackgrounds = false,
+                                localBackgroundPaths = localBgs
+                            )
+                        )
+                    }
+                }
+                is RepoResult.Failure -> {
+                    _uiState.update {
+                        it.copy(
+                            ownerProfile = it.ownerProfile.copy(
+                                isUploadingBackgrounds = false,
+                                toastMessage = res.userMessage
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun openConnectionsSheet(mode: String) {
+        _uiState.update {
+            it.copy(
+                ownerProfile = it.ownerProfile.copy(
+                    connectionsSheetMode = mode,
+                    connectionsUsers = emptyList(),
+                    isLoadingConnections = true
+                )
+            )
+        }
+        viewModelScope.launch {
+            when (val res = repository.fetchConnectionsList(mode)) {
+                is RepoResult.Success -> {
+                    _uiState.update {
+                        it.copy(
+                            ownerProfile = it.ownerProfile.copy(
+                                connectionsUsers = res.data,
+                                isLoadingConnections = false
+                            )
+                        )
+                    }
+                }
+                is RepoResult.Failure -> {
+                    _uiState.update {
+                        it.copy(
+                            ownerProfile = it.ownerProfile.copy(
+                                isLoadingConnections = false,
+                                toastMessage = res.userMessage
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun closeConnectionsSheet() {
+        _uiState.update {
+            it.copy(ownerProfile = it.ownerProfile.copy(connectionsSheetMode = null))
+        }
+    }
+
+    fun toggleConnectionFollow(contact: ContactModel) {
+        viewModelScope.launch {
+            when (val res = repository.toggleFollowOfflineFirst(contact, networkQuality.value)) {
+                is RepoResult.Success -> {
+                    _uiState.update { st ->
+                        val updatedList = st.ownerProfile.connectionsUsers.map {
+                            if (it.userId == contact.userId) res.data else it
+                        }
+                        val delta = if (res.data.isFollowing != contact.isFollowing) {
+                            if (res.data.isFollowing) 1L else -1L
+                        } else 0L
+                        val nextProfile = st.myProfile?.let { p ->
+                            p.copy(followingCount = (p.followingCount + delta).coerceAtLeast(0L))
+                        }
+                        st.copy(
+                            myProfile = nextProfile,
+                            ownerProfile = st.ownerProfile.copy(connectionsUsers = updatedList)
+                        )
+                    }
+                    refreshContacts(reset = true)
+                }
+                is RepoResult.Failure -> {
+                    _uiState.update {
+                        it.copy(ownerProfile = it.ownerProfile.copy(toastMessage = res.userMessage))
+                    }
+                }
+            }
+        }
+    }
+
+    fun openOwnerItemViewer(item: OwnerProfileItemDto) {
+        val currentTab = _uiState.value.ownerProfile.activeCategory
+        val items = _uiState.value.ownerProfile.itemsByCategory[currentTab].orEmpty()
+        if (item.video != null) {
+            val videoList = items.mapNotNull { it.video }
+            val idx = videoList.indexOfFirst { it.videoId == item.video.videoId }.coerceAtLeast(0)
+            val title = when (currentTab) {
+                OwnerProfileTab.POSTS -> "Posts"
+                OwnerProfileTab.REPOSTS -> "Reposts"
+                OwnerProfileTab.LOCKED -> "Locked"
+                OwnerProfileTab.SAVED -> "Saved"
+            }
+            feedController.openModalFeedPlayer(title, videoList, idx)
+            return
+        }
+        _uiState.update {
+            it.copy(ownerProfile = it.ownerProfile.copy(activeViewerItem = item))
+        }
+        if (item.postId.isNotBlank() && networkQuality.value == NetworkQuality.ONLINE) {
+            viewModelScope.launch {
+                when (val res = repository.engagePost(item.postId, "view", true)) {
+                    is RepoResult.Success -> {
+                        patchOwnerItem(item.postId) { cur ->
+                            cur.copy(likesCount = res.data.likesCount, viewsCount = res.data.viewsCount)
+                        }
+                    }
+                    is RepoResult.Failure -> Unit
+                }
+            }
+        }
+    }
+
+    fun closeOwnerItemViewer() {
+        _uiState.update {
+            it.copy(ownerProfile = it.ownerProfile.copy(activeViewerItem = null))
+        }
+    }
+
+    fun toggleOwnerPostLike(item: OwnerProfileItemDto) {
+        val postId = item.postId.ifBlank { return }
+        val next = !item.isLiked
+        patchOwnerItem(postId) { cur ->
+            cur.copy(
+                isLiked = next,
+                likesCount = (cur.likesCount + if (next) 1L else -1L).coerceAtLeast(0L)
+            )
+        }
+        viewModelScope.launch {
+            when (val res = repository.engagePost(postId, "like", next)) {
+                is RepoResult.Success -> {
+                    patchOwnerItem(postId) { cur ->
+                        cur.copy(likesCount = res.data.likesCount, viewsCount = res.data.viewsCount)
+                    }
+                }
+                is RepoResult.Failure -> Unit
+            }
+        }
+    }
+
+    fun toggleOwnerPostSave(item: OwnerProfileItemDto) {
+        val postId = item.postId.ifBlank { return }
+        val next = !item.isSaved
+        patchOwnerItem(postId) { cur -> cur.copy(isSaved = next) }
+        viewModelScope.launch {
+            repository.engagePost(postId, "save", next)
+            loadOwnerProfileItemsInternal(OwnerProfileTab.SAVED)
+        }
+    }
+
+    fun toggleOwnerPostLock(item: OwnerProfileItemDto) {
+        val postId = item.postId.ifBlank { return }
+        val targetVis = if (item.visibility == "private") "public" else "private"
+        viewModelScope.launch {
+            when (repository.setPostVisibility(postId, targetVis)) {
+                is RepoResult.Success -> {
+                    _uiState.update {
+                        it.copy(
+                            ownerProfile = it.ownerProfile.copy(
+                                activeViewerItem = null,
+                                toastMessage = if (targetVis == "private") "Moved to Locked" else "Made Public"
+                            )
+                        )
+                    }
+                    loadOwnerProfileItemsInternal(OwnerProfileTab.POSTS)
+                    loadOwnerProfileItemsInternal(OwnerProfileTab.LOCKED)
+                }
+                is RepoResult.Failure -> Unit
+            }
+        }
+    }
+
+    private fun patchOwnerItem(postId: String, transform: (OwnerProfileItemDto) -> OwnerProfileItemDto) {
+        _uiState.update { st ->
+            val updatedMap = st.ownerProfile.itemsByCategory.mapValues { (_, list) ->
+                list.map { if (it.postId == postId) transform(it) else it }
+            }
+            val updatedViewer = st.ownerProfile.activeViewerItem?.let { v ->
+                if (v.postId == postId) transform(v) else v
+            }
+            st.copy(
+                ownerProfile = st.ownerProfile.copy(
+                    itemsByCategory = updatedMap,
+                    activeViewerItem = updatedViewer
+                )
+            )
+        }
+    }
+
+    fun showOwnerProfileToast(message: String) {
+        _uiState.update {
+            it.copy(ownerProfile = it.ownerProfile.copy(toastMessage = message))
+        }
+    }
+
+    fun clearOwnerProfileToast() {
+        _uiState.update {
+            it.copy(ownerProfile = it.ownerProfile.copy(toastMessage = null))
+        }
+    }
+
+    // =========================================================================
+    // OTHER USER PROFILE NAVIGATION, CACHING, NICKNAME, BLOCK/MUTE, REPORT
+    // =========================================================================
+
+    fun refreshViewerNicknames() {
+        if (networkQuality.value == NetworkQuality.OFFLINE) return
+        viewModelScope.launch {
+            val map = repository.fetchViewerNicknames() ?: return@launch
+            feedController.updateViewerNicknames(map)
+            _uiState.update { st ->
+                val updatedStack = st.otherProfile.stack.map { inst ->
+                    val nick = map[inst.userId].orEmpty()
+                    inst.copy(profile = inst.profile?.copy(nickname = nick))
+                }
+                st.copy(
+                    otherProfile = st.otherProfile.copy(
+                        viewerNicknames = map,
+                        stack = updatedStack
+                    )
+                )
+            }
+        }
+    }
+
+    fun openUserProfile(userId: String) {
+        val targetId = userId.trim()
+        if (targetId.isEmpty()) return
+
+        // Always close modal player / discovery overlays above the profile layer if open
+        if (feedController.state.value.modalPlayer.isOpen) {
+            feedController.closeModalFeedPlayer()
+        }
+        if (feedController.state.value.audioDiscovery.isOpen) {
+            feedController.closeAudioDiscovery()
+        }
+        if (feedController.state.value.hashtagDiscovery.isOpen) {
+            feedController.closeHashtagDiscovery()
+        }
+
+        val myId = _uiState.value.session?.userId.orEmpty()
+        if (myId.isNotEmpty() && targetId == myId) {
+            clearOtherProfileStack()
+            if (feedController.state.value.search.isOpen) {
+                feedController.closeSearch()
+            }
+            if (feedController.state.value.isLiveScreenOpen) {
+                feedController.closeLiveScreen()
+            }
+            selectHomeTab(HomeTab.PROFILE)
+            return
+        }
+
+        feedPlayerController.pause()
+
+        // Avoid pushing duplicate consecutive instance of the exact same user
+        if (_uiState.value.otherProfile.top?.userId == targetId) {
+            refreshOtherProfile(isPullGesture = false)
+            return
+        }
+
+        viewModelScope.launch {
+            val cachedProfile = repository.loadCachedOtherProfile(targetId)
+            val cachedAvatar = repository.loadCachedOtherAvatarPath(targetId)
+            val cachedBgs = repository.loadCachedOtherBackgroundPaths(targetId)
+            val cachedItemsMap = OtherProfileTab.entries.associateWith { tab ->
+                repository.loadCachedOtherProfileItems(targetId, tab.apiValue)?.items.orEmpty()
+            }.filterValues { it.isNotEmpty() }
+
+            val seedInstance = OtherProfileInstanceState(
+                userId = targetId,
+                profile = cachedProfile,
+                localAvatarPath = cachedAvatar,
+                localBackgroundPaths = cachedBgs,
+                itemsByCategory = cachedItemsMap,
+                isLoadingProfile = cachedProfile == null,
+                isLoadingItems = cachedItemsMap[OtherProfileTab.POSTS].isNullOrEmpty()
+            )
+            _uiState.update { st ->
+                st.copy(
+                    otherProfile = st.otherProfile.copy(
+                        stack = st.otherProfile.stack + seedInstance
+                    )
+                )
+            }
+            refreshOtherProfileInternal(targetId, isPullGesture = false)
+        }
+    }
+
+    fun closeTopOtherProfile() {
+        _uiState.update { st ->
+            val current = st.otherProfile.stack
+            val nextStack = if (current.isNotEmpty()) current.dropLast(1) else emptyList()
+            st.copy(
+                otherProfile = st.otherProfile.copy(
+                    stack = nextStack,
+                    reportSheet = UserReportSheetState()
+                )
+            )
+        }
+        val st = _uiState.value
+        val modalClosed = !feedController.state.value.modalPlayer.isOpen &&
+            !feedController.state.value.search.isOpen &&
+            !feedController.state.value.hashtagDiscovery.isOpen &&
+            !feedController.state.value.audioDiscovery.isOpen &&
+            !feedController.state.value.isLiveScreenOpen
+        if (st.otherProfile.stack.isEmpty() && st.activeTab == HomeTab.FEEDS && modalClosed) {
+            feedController.playActiveFeedVideoIfAvailable()
+        }
+    }
+
+    fun clearOtherProfileStack() {
+        _uiState.update {
+            it.copy(
+                otherProfile = it.otherProfile.copy(
+                    stack = emptyList(),
+                    reportSheet = UserReportSheetState()
+                )
+            )
+        }
+    }
+
+    fun refreshOtherProfile(isPullGesture: Boolean) {
+        val topId = _uiState.value.otherProfile.top?.userId ?: return
+        viewModelScope.launch {
+            refreshOtherProfileInternal(topId, isPullGesture)
+        }
+    }
+
+    private suspend fun refreshOtherProfileInternal(targetId: String, isPullGesture: Boolean) {
+        if (isPullGesture) {
+            updateOtherInstance(targetId) { it.copy(isRefreshing = true) }
+        }
+        if (networkQuality.value == NetworkQuality.ONLINE) {
+            when (val res = repository.fetchOtherProfile(targetId)) {
+                is RepoResult.Success -> {
+                    val dto = res.data
+                    val updatedNickMap = _uiState.value.otherProfile.viewerNicknames.toMutableMap().apply {
+                        if (dto.nickname.isNotBlank()) put(targetId, dto.nickname) else remove(targetId)
+                    }
+                    feedController.updateViewerNicknames(updatedNickMap)
+                    _uiState.update { st ->
+                        st.copy(otherProfile = st.otherProfile.copy(viewerNicknames = updatedNickMap))
+                    }
+                    updateOtherInstance(targetId) { inst ->
+                        inst.copy(profile = dto, isLoadingProfile = false)
+                    }
+                    val avatarPath = repository.ensureOtherAvatarCachedLocally(targetId, dto.avatarFingerprintHash)
+                    val bgPaths = repository.ensureOtherBackgroundsCachedLocally(targetId, dto.backgroundPhotos)
+                    updateOtherInstance(targetId) { inst ->
+                        inst.copy(
+                            localAvatarPath = avatarPath ?: inst.localAvatarPath,
+                            localBackgroundPaths = bgPaths
+                        )
+                    }
+                }
+                is RepoResult.Failure -> {
+                    updateOtherInstance(targetId) { it.copy(isLoadingProfile = false) }
+                    if (isPullGesture) showOtherProfileToast(res.userMessage)
+                }
+            }
+        } else {
+            updateOtherInstance(targetId) { it.copy(isLoadingProfile = false) }
+        }
+
+        val activeCat = _uiState.value.otherProfile.stack.lastOrNull { it.userId == targetId }?.activeCategory
+            ?: OtherProfileTab.POSTS
+        loadOtherProfileItemsInternal(targetId, activeCat)
+        updateOtherInstance(targetId) { it.copy(isRefreshing = false) }
+    }
+
+    fun selectOtherProfileCategory(tab: OtherProfileTab) {
+        val topId = _uiState.value.otherProfile.top?.userId ?: return
+        updateOtherInstance(topId) { it.copy(activeCategory = tab) }
+        viewModelScope.launch {
+            loadOtherProfileItemsInternal(topId, tab)
+        }
+    }
+
+    private suspend fun loadOtherProfileItemsInternal(targetId: String, tab: OtherProfileTab) {
+        val cached = repository.loadCachedOtherProfileItems(targetId, tab.apiValue)?.items
+        val existing = _uiState.value.otherProfile.stack.lastOrNull { it.userId == targetId }?.itemsByCategory?.get(tab)
+        if (!cached.isNullOrEmpty() && existing.isNullOrEmpty()) {
+            updateOtherInstance(targetId) { inst ->
+                inst.copy(itemsByCategory = inst.itemsByCategory + (tab to cached))
+            }
+        }
+        if (networkQuality.value == NetworkQuality.OFFLINE) return
+        updateOtherInstance(targetId) { it.copy(isLoadingItems = true) }
+        when (val res = repository.fetchOtherProfileItems(targetId, tab.apiValue)) {
+            is RepoResult.Success -> {
+                updateOtherInstance(targetId) { inst ->
+                    inst.copy(
+                        isLoadingItems = false,
+                        itemsByCategory = inst.itemsByCategory + (tab to res.data.items)
+                    )
+                }
+            }
+            is RepoResult.Failure -> {
+                updateOtherInstance(targetId) { it.copy(isLoadingItems = false) }
+            }
+        }
+    }
+
+    fun toggleOtherProfileFollow() {
+        val inst = _uiState.value.otherProfile.top ?: return
+        val profile = inst.profile ?: return
+        if (profile.isBlocked || profile.isBlockedBy) return
+        val contact = ContactModel(
+            userId = profile.userId,
+            fullName = profile.fullName,
+            username = profile.username,
+            location = profile.location,
+            avatarFingerprintHash = profile.avatarFingerprintHash,
+            isFollowing = profile.isFollowing,
+            followsMe = profile.followsMe,
+            relationship = profile.relationship,
+            riskScore = 0
+        )
+        viewModelScope.launch {
+            when (val res = repository.toggleFollowOfflineFirst(contact, networkQuality.value)) {
+                is RepoResult.Success -> {
+                    val delta = if (res.data.isFollowing != profile.isFollowing) {
+                        if (res.data.isFollowing) 1L else -1L
+                    } else 0L
+                    val updatedProfile = profile.copy(
+                        isFollowing = res.data.isFollowing,
+                        followsMe = res.data.followsMe,
+                        relationship = res.data.relationship,
+                        followersCount = (profile.followersCount + delta).coerceAtLeast(0L)
+                    )
+                    repository.cacheOtherProfile(updatedProfile)
+                    updateOtherInstance(inst.userId) { cur ->
+                        cur.copy(profile = updatedProfile)
+                    }
+                    refreshContacts(reset = true)
+                    refreshMyProfile()
+                }
+                is RepoResult.Failure -> showOtherProfileToast(res.userMessage)
+            }
+        }
+    }
+
+    fun openOtherProfileConnections(kind: String) {
+        val topId = _uiState.value.otherProfile.top?.userId ?: return
+        updateOtherInstance(topId) {
+            it.copy(
+                connectionsSheetMode = kind,
+                connectionsUsers = emptyList(),
+                isLoadingConnections = true
+            )
+        }
+        viewModelScope.launch {
+            when (val res = repository.fetchOtherUserConnections(topId, kind)) {
+                is RepoResult.Success -> {
+                    updateOtherInstance(topId) {
+                        it.copy(connectionsUsers = res.data, isLoadingConnections = false)
+                    }
+                }
+                is RepoResult.Failure -> {
+                    updateOtherInstance(topId) { it.copy(isLoadingConnections = false) }
+                    showOtherProfileToast(res.userMessage)
+                }
+            }
+        }
+    }
+
+    fun closeOtherProfileConnections() {
+        val topId = _uiState.value.otherProfile.top?.userId ?: return
+        updateOtherInstance(topId) { it.copy(connectionsSheetMode = null) }
+    }
+
+    fun toggleOtherConnectionFollow(contact: ContactModel) {
+        val topId = _uiState.value.otherProfile.top?.userId ?: return
+        viewModelScope.launch {
+            when (val res = repository.toggleFollowOfflineFirst(contact, networkQuality.value)) {
+                is RepoResult.Success -> {
+                    updateOtherInstance(topId) { inst ->
+                        val updated = inst.connectionsUsers.map {
+                            if (it.userId == contact.userId) res.data else it
+                        }
+                        inst.copy(connectionsUsers = updated)
+                    }
+                    refreshContacts(reset = true)
+                }
+                is RepoResult.Failure -> showOtherProfileToast(res.userMessage)
+            }
+        }
+    }
+
+    fun setOtherUserNickname(rawNickname: String) {
+        val topId = _uiState.value.otherProfile.top?.userId ?: return
+        viewModelScope.launch {
+            when (val res = repository.setUserNickname(topId, rawNickname)) {
+                is RepoResult.Success -> {
+                    val saved = res.data
+                    val updatedMap = _uiState.value.otherProfile.viewerNicknames.toMutableMap().apply {
+                        if (saved.isEmpty()) remove(topId) else put(topId, saved)
+                    }
+                    feedController.updateViewerNicknames(updatedMap)
+                    _uiState.update { st ->
+                        val updatedStack = st.otherProfile.stack.map { inst ->
+                            if (inst.userId == topId) {
+                                inst.copy(profile = inst.profile?.copy(nickname = saved))
+                            } else inst
+                        }
+                        st.copy(
+                            otherProfile = st.otherProfile.copy(
+                                stack = updatedStack,
+                                viewerNicknames = updatedMap,
+                                toastMessage = if (saved.isEmpty()) "Nickname removed" else "Nickname updated"
+                            )
+                        )
+                    }
+                }
+                is RepoResult.Failure -> showOtherProfileToast(res.userMessage)
+            }
+        }
+    }
+
+    fun toggleOtherUserBlock() {
+        val inst = _uiState.value.otherProfile.top ?: return
+        val profile = inst.profile ?: return
+        val nextBlocked = !profile.isBlocked
+        viewModelScope.launch {
+            when (val res = repository.setUserBlocked(inst.userId, nextBlocked)) {
+                is RepoResult.Success -> {
+                    val nextFollowers = if (nextBlocked && profile.isFollowing) {
+                        (profile.followersCount - 1L).coerceAtLeast(0L)
+                    } else profile.followersCount
+                    val updatedProfile = profile.copy(
+                        isBlocked = res.data,
+                        isFollowing = if (res.data) false else profile.isFollowing,
+                        relationship = if (res.data) "follow" else profile.relationship,
+                        followersCount = nextFollowers
+                    )
+                    updateOtherInstance(inst.userId) { cur ->
+                        cur.copy(
+                            profile = updatedProfile,
+                            itemsByCategory = if (res.data) emptyMap() else cur.itemsByCategory
+                        )
+                    }
+                    if (!res.data) {
+                        loadOtherProfileItemsInternal(inst.userId, inst.activeCategory)
+                    }
+                    feedController.refreshSafetyPreferences()
+                    feedController.refreshActiveFeed()
+                    refreshContacts(reset = true)
+                    showOtherProfileToast(if (res.data) "User blocked" else "User unblocked")
+                }
+                is RepoResult.Failure -> showOtherProfileToast(res.userMessage)
+            }
+        }
+    }
+
+    fun toggleOtherUserMute() {
+        val inst = _uiState.value.otherProfile.top ?: return
+        val profile = inst.profile ?: return
+        val nextMuted = !profile.isMuted
+        viewModelScope.launch {
+            when (val res = repository.setUserMuted(inst.userId, nextMuted)) {
+                is RepoResult.Success -> {
+                    updateOtherInstance(inst.userId) { cur ->
+                        cur.copy(profile = cur.profile?.copy(isMuted = res.data))
+                    }
+                    feedController.refreshSafetyPreferences()
+                    feedController.refreshActiveFeed()
+                    showOtherProfileToast(if (res.data) "User muted" else "User unmuted")
+                }
+                is RepoResult.Failure -> showOtherProfileToast(res.userMessage)
+            }
+        }
+    }
+
+    fun openOtherReportSheet() {
+        val topId = _uiState.value.otherProfile.top?.userId ?: return
+        _uiState.update { st ->
+            st.copy(
+                otherProfile = st.otherProfile.copy(
+                    reportSheet = UserReportSheetState(
+                        isOpen = true,
+                        targetUserId = topId,
+                        step = 1
+                    )
+                )
+            )
+        }
+    }
+
+    fun selectOtherReportCategory(category: UserReportCategory) {
+        _uiState.update { st ->
+            st.copy(
+                otherProfile = st.otherProfile.copy(
+                    reportSheet = st.otherProfile.reportSheet.copy(
+                        selectedCategory = category,
+                        selectedSubReason = category.subReasons.firstOrNull().orEmpty(),
+                        step = 2
+                    )
+                )
+            )
+        }
+    }
+
+    fun selectOtherReportSubReason(subReason: String) {
+        _uiState.update { st ->
+            st.copy(
+                otherProfile = st.otherProfile.copy(
+                    reportSheet = st.otherProfile.reportSheet.copy(selectedSubReason = subReason)
+                )
+            )
+        }
+    }
+
+    fun updateOtherReportDetails(details: String) {
+        _uiState.update { st ->
+            st.copy(
+                otherProfile = st.otherProfile.copy(
+                    reportSheet = st.otherProfile.reportSheet.copy(details = details.take(400))
+                )
+            )
+        }
+    }
+
+    fun backOtherReportStep() {
+        _uiState.update { st ->
+            val curStep = st.otherProfile.reportSheet.step
+            st.copy(
+                otherProfile = st.otherProfile.copy(
+                    reportSheet = st.otherProfile.reportSheet.copy(step = if (curStep <= 1) 1 else 1)
+                )
+            )
+        }
+    }
+
+    fun submitOtherReport() {
+        val rs = _uiState.value.otherProfile.reportSheet
+        val category = rs.selectedCategory ?: return
+        if (rs.targetUserId.isBlank() || rs.isSubmitting) return
+        viewModelScope.launch {
+            _uiState.update { st ->
+                st.copy(
+                    otherProfile = st.otherProfile.copy(
+                        reportSheet = st.otherProfile.reportSheet.copy(isSubmitting = true)
+                    )
+                )
+            }
+            when (val res = repository.submitUserReport(
+                userId = rs.targetUserId,
+                category = category.apiValue,
+                subReason = rs.selectedSubReason,
+                details = rs.details.trim()
+            )) {
+                is RepoResult.Success -> {
+                    _uiState.update { st ->
+                        st.copy(
+                            otherProfile = st.otherProfile.copy(
+                                reportSheet = st.otherProfile.reportSheet.copy(
+                                    step = 3,
+                                    isSubmitting = false
+                                )
+                            )
+                        )
+                    }
+                }
+                is RepoResult.Failure -> {
+                    _uiState.update { st ->
+                        st.copy(
+                            otherProfile = st.otherProfile.copy(
+                                reportSheet = st.otherProfile.reportSheet.copy(isSubmitting = false),
+                                toastMessage = res.userMessage
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun closeOtherReportSheet() {
+        _uiState.update { st ->
+            st.copy(
+                otherProfile = st.otherProfile.copy(reportSheet = UserReportSheetState())
+            )
+        }
+    }
+
+    fun openOtherProfileItem(item: OwnerProfileItemDto) {
+        val inst = _uiState.value.otherProfile.top ?: return
+        val items = inst.itemsByCategory[inst.activeCategory].orEmpty()
+        if (item.video != null) {
+            val videoList = items.mapNotNull { it.video }
+            val idx = videoList.indexOfFirst { it.videoId == item.video.videoId }.coerceAtLeast(0)
+            val displayName = inst.profile?.let { p -> p.nickname.ifBlank { p.fullName } }.orEmpty()
+            val title = when (inst.activeCategory) {
+                OtherProfileTab.POSTS -> if (displayName.isNotBlank()) "$displayName · Posts" else "Posts"
+                OtherProfileTab.REPOSTS -> if (displayName.isNotBlank()) "$displayName · Reposts" else "Reposts"
+            }
+            feedController.openModalFeedPlayer(title, videoList, idx)
+            return
+        }
+        updateOtherInstance(inst.userId) { it.copy(activeViewerItem = item) }
+        if (item.postId.isNotBlank() && networkQuality.value == NetworkQuality.ONLINE) {
+            viewModelScope.launch {
+                when (val res = repository.engagePost(item.postId, "view", true)) {
+                    is RepoResult.Success -> {
+                        patchOtherItem(inst.userId, item.postId) { cur ->
+                            cur.copy(likesCount = res.data.likesCount, viewsCount = res.data.viewsCount)
+                        }
+                    }
+                    is RepoResult.Failure -> Unit
+                }
+            }
+        }
+    }
+
+    fun closeOtherProfileItemViewer() {
+        val topId = _uiState.value.otherProfile.top?.userId ?: return
+        updateOtherInstance(topId) { it.copy(activeViewerItem = null) }
+    }
+
+    fun toggleOtherPostLike(item: OwnerProfileItemDto) {
+        val topId = _uiState.value.otherProfile.top?.userId ?: return
+        val postId = item.postId.ifBlank { return }
+        val next = !item.isLiked
+        patchOtherItem(topId, postId) { cur ->
+            cur.copy(
+                isLiked = next,
+                likesCount = (cur.likesCount + if (next) 1L else -1L).coerceAtLeast(0L)
+            )
+        }
+        viewModelScope.launch {
+            when (val res = repository.engagePost(postId, "like", next)) {
+                is RepoResult.Success -> {
+                    patchOtherItem(topId, postId) { cur ->
+                        cur.copy(likesCount = res.data.likesCount, viewsCount = res.data.viewsCount)
+                    }
+                }
+                is RepoResult.Failure -> Unit
+            }
+        }
+    }
+
+    fun toggleOtherPostSave(item: OwnerProfileItemDto) {
+        val topId = _uiState.value.otherProfile.top?.userId ?: return
+        val postId = item.postId.ifBlank { return }
+        val next = !item.isSaved
+        patchOtherItem(topId, postId) { cur -> cur.copy(isSaved = next) }
+        viewModelScope.launch {
+            repository.engagePost(postId, "save", next)
+            loadOwnerProfileItemsInternal(OwnerProfileTab.SAVED)
+        }
+    }
+
+    fun showOtherProfileToast(message: String) {
+        _uiState.update {
+            it.copy(otherProfile = it.otherProfile.copy(toastMessage = message))
+        }
+    }
+
+    fun clearOtherProfileToast() {
+        _uiState.update {
+            it.copy(otherProfile = it.otherProfile.copy(toastMessage = null))
+        }
+    }
+
+    private fun updateOtherInstance(
+        userId: String,
+        transform: (OtherProfileInstanceState) -> OtherProfileInstanceState
+    ) {
+        _uiState.update { st ->
+            val idx = st.otherProfile.stack.indexOfLast { it.userId == userId }
+            if (idx < 0) return@update st
+            val mutable = st.otherProfile.stack.toMutableList()
+            mutable[idx] = transform(mutable[idx])
+            st.copy(otherProfile = st.otherProfile.copy(stack = mutable))
+        }
+    }
+
+    private fun patchOtherItem(
+        userId: String,
+        postId: String,
+        transform: (OwnerProfileItemDto) -> OwnerProfileItemDto
+    ) {
+        updateOtherInstance(userId) { inst ->
+            val updatedMap = inst.itemsByCategory.mapValues { (_, list) ->
+                list.map { if (it.postId == postId) transform(it) else it }
+            }
+            val updatedViewer = inst.activeViewerItem?.let { v ->
+                if (v.postId == postId) transform(v) else v
+            }
+            inst.copy(itemsByCategory = updatedMap, activeViewerItem = updatedViewer)
         }
     }
 
@@ -1249,6 +2367,7 @@ class TelefamViewModel(
                     delay(750L)
                     closePostComposer()
                     refreshFeedPosts()
+                    refreshOwnerProfile(isPullGesture = false)
                     feedController.refreshActiveFeed()
                 }
                 is RepoResult.Failure -> {

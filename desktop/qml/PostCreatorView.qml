@@ -149,6 +149,16 @@ Item {
     focus: true
     Keys.onEscapePressed: telefam.closePostComposer()
 
+    Connections {
+        target: telefam
+        function onPrefilledPostSongChanged() {
+            if (telefam.prefilledPostSong && (telefam.prefilledPostSong.title || "").length > 0) {
+                root.postMode = "video"
+                root.selectedSong = telefam.prefilledPostSong
+            }
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0

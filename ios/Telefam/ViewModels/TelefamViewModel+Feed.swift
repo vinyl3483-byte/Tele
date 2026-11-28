@@ -615,10 +615,22 @@ extension TelefamViewModel {
         feedPlayback.setFeedVisible(true)
     }
 
-    func closeModalFeedPlayer() {
+    func closeModalFeedPlayer(quality: TelefamNetworkQuality = .online) {
         showModalFeedPlayer = false
         modalFeedVideos = []
-        if activeTab != .feeds || showFeedSearch || activeHashtagTag != nil || activeAudioId != nil {
+        resumeMainFeedIfVisible(quality: quality)
+    }
+
+    func resumeMainFeedIfVisible(quality: TelefamNetworkQuality) {
+        if activeTab == .feeds && !showFeedSearch && activeHashtagTag == nil && activeAudioId == nil && !showModalFeedPlayer && !showLiveComingSoon {
+            feedPlayback.setFeedVisible(true)
+            let list = activeFeedVideos
+            let idx = activeVideoIndex
+            if list.indices.contains(idx) {
+                let upcoming = Array(list.dropFirst(idx + 1).prefix(5))
+                feedPlayback.playVideo(list[idx], upcoming: upcoming, networkQuality: quality)
+            }
+        } else {
             feedPlayback.setFeedVisible(false)
         }
     }

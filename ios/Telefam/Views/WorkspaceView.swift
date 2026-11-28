@@ -9,9 +9,13 @@ struct WorkspaceView: View {
     @State private var showNewChatSheet = false
     @State private var newChatTitle = ""
     @State private var showNotificationsSheet = false
+    @State private var showSavedVideosSheet = false
+    @State private var showSafetyPreferencesSheet = false
     @State private var isBottomBarVisible = true
 
     private var isDark: Bool { viewModel.isDarkTheme }
+    private var isFeedsTab: Bool { viewModel.activeTab == .feeds }
+    private var isProfileTab: Bool { viewModel.activeTab == .profile }
     private let brandRed = TelefamColors.crimson
 
     private var pillBg: Color {
@@ -23,17 +27,17 @@ struct WorkspaceView: View {
             VStack(spacing: 0) {
                 if viewModel.activeTab == .contacts {
                     ContactsTopBarView(viewModel: viewModel, networkQuality: network.quality)
-                } else {
+                } else if !isFeedsTab && !isProfileTab {
                     topBar
                 }
 
                 ZStack {
-                    TelefamColors.background(isDark: isDark)
+                    (isFeedsTab ? Color.black : TelefamColors.background(isDark: isDark))
                     if sizeClass == .regular {
                         HStack(spacing: 0) {
                             sideRail
                             Rectangle()
-                                .fill(TelefamColors.border(isDark: isDark))
+                                .fill(isFeedsTab ? Color.white.opacity(0.12) : TelefamColors.border(isDark: isDark))
                                 .frame(width: 1)
                             if viewModel.activeTab == .contacts {
                                 ContactsContentView(
@@ -67,10 +71,13 @@ struct WorkspaceView: View {
                         }
                     }
                 }
-                .clipShape(TopRoundedShape(radius: viewModel.activeTab == .contacts ? 0 : 24))
+                .clipShape(TopRoundedShape(radius: (viewModel.activeTab == .contacts || isFeedsTab || isProfileTab) ? 0 : 24))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .background(brandRed.ignoresSafeArea(edges: .top))
+            .background(
+                (isFeedsTab ? Color.black : (isProfileTab ? TelefamColors.background(isDark: isDark) : brandRed))
+                    .ignoresSafeArea(edges: .top)
+            )
 
             if sizeClass != .regular,
                (viewModel.activeTab != .chats || viewModel.selectedConversationId == nil),
@@ -79,7 +86,31 @@ struct WorkspaceView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
-            if let activeToast = viewModel.contactsToastMessage {
+            if viewModel.showFeedSearch {
+                FeedSearchView(viewModel: viewModel, networkQuality: network.quality)
+                    .zIndex(20)
+            }
+            if let tag = viewModel.activeHashtagTag {
+                HashtagDiscoveryView(tag: tag, viewModel: viewModel, networkQuality: network.quality)
+                    .zIndex(21)
+            }
+            if let audioId = viewModel.activeAudioId {
+                AudioDiscoveryView(audioId: audioId, viewModel: viewModel, networkQuality: network.quality)
+                    .zIndex(22)
+            }
+            if viewModel.showModalFeedPlayer {
+                FeedModalPlayerView(viewModel: viewModel, networkQuality: network.quality)
+                    .zIndex(23)
+            }
+            if viewModel.showLiveComingSoon {
+                LiveComingSoonView {
+                    viewModel.showLiveComingSoon = false
+                    viewModel.resumeMainFeedIfVisible(quality: network.quality)
+                }
+                .zIndex(24)
+            }
+
+            if let activeToast = viewModel.contactsToastMessage ?? viewModel.ownerProfileToast {
                 Text(activeToast)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(.white)
@@ -88,6 +119,7 @@ struct WorkspaceView: View {
                     .background(Color.black.opacity(0.88))
                     .cornerRadius(20)
                     .padding(.bottom, 84)
+                    .zIndex(30)
             }
         }
         .sheet(isPresented: $showNewChatSheet) {
@@ -113,6 +145,12 @@ struct WorkspaceView: View {
         }
         .sheet(isPresented: $showNotificationsSheet) {
             notificationsSheetView
+        }
+        .sheet(isPresented: $showSavedVideosSheet) {
+            SavedVideosSheetIOS(viewModel: viewModel, networkQuality: network.quality)
+        }
+        .sheet(isPresented: $showSafetyPreferencesSheet) {
+            SafetyPreferencesSheetIOS(viewModel: viewModel, networkQuality: network.quality)
         }
         .fullScreenCover(isPresented: $viewModel.isPostComposerOpen) {
             PostCreatorView(viewModel: viewModel, networkQuality: network.quality)
@@ -230,9 +268,24 @@ struct WorkspaceView: View {
         case .chats:
             chatsMainContent
         case .feeds:
-            feedsContentView
+            FeedView(viewModel: viewModel, networkQuality: network.quality)
         case .profile:
-            profileOverviewView
+            OwnerProfileView(
+                viewModel: viewModel,
+                networkQuality: network.quality,
+                isRegularWidth: sizeClass == .regular,
+                bottomNavInsetPadding: sizeClass == .regular ? 18 : 74,
+                onBottomBarVisibilityChange: { visible in
+                    guard sizeClass != .regular else { return }
+                    withAnimation(.easeInOut(duration: 0.22)) {
+                        isBottomBarVisible = visible
+                    }
+                }
+            )
+            .telefamSwipeBack(enabled: sizeClass != .regular) {
+                viewModel.activeTab = .chats
+                isBottomBarVisible = true
+            }
         case .contacts:
             EmptyView()
         }
@@ -550,6 +603,46 @@ struct WorkspaceView: View {
                 }
 
                 Button {
+                    showSavedVideosSheet = true
+                } label: {
+                    HStack(spacing: 8) {
+                        BookmarkVectorIcon()
+                            .stroke(TelefamColors.inkPrimary(isDark: isDark), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                            .frame(width: 18, height: 18)
+                        Text("Saved videos")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(TelefamColors.inkPrimary(isDark: isDark))
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 50)
+                    .background(TelefamColors.surface(isDark: isDark))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(TelefamColors.border(isDark: isDark), lineWidth: 1)
+                    )
+                    .cornerRadius(12)
+                }
+
+                Button {
+                    showSafetyPreferencesSheet = true
+                } label: {
+                    HStack(spacing: 8) {
+                        BlockCircleVectorIcon()
+                            .stroke(TelefamColors.inkPrimary(isDark: isDark), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                            .frame(width: 18, height: 18)
+                        Text("Muted & Blocked")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(TelefamColors.inkPrimary(isDark: isDark))
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 50)
+                    .background(TelefamColors.surface(isDark: isDark))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(TelefamColors.border(isDark: isDark), lineWidth: 1)
+                    )
+                    .cornerRadius(12)
+                }
+
+                Button {
                     viewModel.signOut()
                 } label: {
                     HStack(spacing: 8) {
@@ -719,11 +812,11 @@ struct WorkspaceView: View {
         let contactsActive = viewModel.activeTab == .contacts
         let feedsActive = viewModel.activeTab == .feeds
         let profileActive = viewModel.activeTab == .profile
-        let inactiveColor = TelefamColors.inkSecondary(isDark: isDark)
+        let inactiveColor = feedsActive ? Color.white.opacity(0.68) : TelefamColors.inkSecondary(isDark: isDark)
 
         return VStack(spacing: 0) {
             Rectangle()
-                .fill(TelefamColors.border(isDark: isDark))
+                .fill(feedsActive ? Color.white.opacity(0.12) : TelefamColors.border(isDark: isDark))
                 .frame(height: 1)
 
             HStack(spacing: 0) {
@@ -783,7 +876,11 @@ struct WorkspaceView: View {
                 Button {
                     viewModel.activeTab = .feeds
                     isBottomBarVisible = true
-                    Task { await viewModel.refreshFeedPosts(quality: network.quality) }
+                    Task {
+                        if viewModel.activeFeedVideos.isEmpty {
+                            await viewModel.refreshVideoFeed(tab: viewModel.videoFeedTab, reset: true, quality: network.quality)
+                        }
+                    }
                 } label: {
                     navItemLabel(title: "Feeds", active: feedsActive, inactiveColor: inactiveColor) {
                         FeedsVectorIcon()
@@ -807,7 +904,7 @@ struct WorkspaceView: View {
             .padding(.horizontal, 6)
             .frame(height: TelefamMetrics.bottomBarHeight)
         }
-        .background(TelefamColors.bar(isDark: isDark))
+        .background(feedsActive ? Color.black.opacity(0.92) : TelefamColors.bar(isDark: isDark))
     }
 
     private var sideRail: some View {
@@ -815,7 +912,7 @@ struct WorkspaceView: View {
         let contactsActive = viewModel.activeTab == .contacts
         let feedsActive = viewModel.activeTab == .feeds
         let profileActive = viewModel.activeTab == .profile
-        let inactiveColor = TelefamColors.inkSecondary(isDark: isDark)
+        let inactiveColor = feedsActive ? Color.white.opacity(0.68) : TelefamColors.inkSecondary(isDark: isDark)
 
         return VStack(spacing: 18) {
             Button {
@@ -865,7 +962,11 @@ struct WorkspaceView: View {
 
             Button {
                 viewModel.activeTab = .feeds
-                Task { await viewModel.refreshFeedPosts(quality: network.quality) }
+                Task {
+                    if viewModel.activeFeedVideos.isEmpty {
+                        await viewModel.refreshVideoFeed(tab: viewModel.videoFeedTab, reset: true, quality: network.quality)
+                    }
+                }
             } label: {
                 navItemLabel(title: "Feeds", active: feedsActive, inactiveColor: inactiveColor) {
                     FeedsVectorIcon()
@@ -889,7 +990,7 @@ struct WorkspaceView: View {
         }
         .padding(.vertical, 18)
         .frame(width: TelefamMetrics.railWidth)
-        .background(TelefamColors.rail(isDark: isDark))
+        .background(feedsActive ? Color.black.opacity(0.95) : TelefamColors.rail(isDark: isDark))
     }
 
     private func navItemLabel<Icon: View>(

@@ -101,6 +101,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 fun FeedSearchScreen(
     state: FeedSearchState,
     feedController: FeedController,
+    viewerNicknames: Map<String, String> = emptyMap(),
     onClose: () -> Unit
 ) {
     BackHandler(onBack = onClose)
@@ -386,6 +387,10 @@ fun FeedSearchScreen(
                                 items(state.creators, key = { it.userId }) { creator ->
                                     CreatorResultRow(
                                         creator = creator,
+                                        nicknameOverride = viewerNicknames[creator.userId].orEmpty(),
+                                        onOpenProfile = {
+                                            feedController.openCreatorProfile(creator.userId)
+                                        },
                                         onFollowToggle = {
                                             feedController.toggleCreatorFollowById(creator.userId, creator.isFollowing)
                                         }
@@ -684,6 +689,7 @@ fun FeedModalPlayerScreen(
     state: ModalFeedPlayerState,
     playbackState: FeedPlaybackState,
     feedController: FeedController,
+    viewerNicknames: Map<String, String> = emptyMap(),
     onClose: () -> Unit
 ) {
     BackHandler(onBack = onClose)
@@ -716,6 +722,7 @@ fun FeedModalPlayerScreen(
             val isCurrent = idx == pagerState.currentPage
             FeedVideoPageItem(
                 video = video,
+                creatorDisplayOverride = viewerNicknames[video.creatorId].orEmpty(),
                 isActive = isCurrent,
                 player = if (isCurrent) feedController.playerController.playerInstance else null,
                 playbackState = playbackState,
@@ -723,6 +730,7 @@ fun FeedModalPlayerScreen(
                 onSingleTap = { feedController.playerController.togglePlayPause() },
                 onDoubleTapLike = { feedController.onDoubleTapLike(video) },
                 onRetry = { feedController.onModalPlayerSettled(idx) },
+                onCreatorClick = { feedController.openCreatorProfile(video.creatorId) },
                 onToggleFollow = { feedController.toggleFollowCreator(video) },
                 onToggleLike = { feedController.toggleLike(video) },
                 onOpenComments = { feedController.openComments(video) },
@@ -1021,13 +1029,21 @@ private fun HashtagResultRow(tag: HashtagDto, onClick: () -> Unit) {
 }
 
 @Composable
-private fun CreatorResultRow(creator: CreatorSearchDto, onFollowToggle: () -> Unit) {
+private fun CreatorResultRow(
+    creator: CreatorSearchDto,
+    nicknameOverride: String = "",
+    onOpenProfile: () -> Unit,
+    onFollowToggle: () -> Unit
+) {
+    val displayName = nicknameOverride.trim().ifBlank { creator.fullName.ifBlank { creator.username } }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(Color(0xFF14161D))
-            .padding(horizontal = 14.dp, vertical = 12.dp),
+            .clickable(onClick = onOpenProfile)
+            .padding(horizontal = 14.dp, vertical = 12.dp)
+            .testTag("search_creator_row_${creator.userId}"),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
@@ -1038,14 +1054,14 @@ private fun CreatorResultRow(creator: CreatorSearchDto, onFollowToggle: () -> Un
             contentAlignment = Alignment.Center
         ) {
             Text(
-                text = creator.fullName.ifBlank { creator.username }.take(2).uppercase(),
+                text = displayName.take(2).uppercase(),
                 color = Color.White,
                 fontWeight = FontWeight.Bold
             )
         }
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(creator.fullName.ifBlank { creator.username }, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Text(displayName, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
             Text("@${creator.username}", color = Color.White.copy(alpha = 0.65f), fontSize = 13.sp)
         }
         TextButton(onClick = onFollowToggle) {
